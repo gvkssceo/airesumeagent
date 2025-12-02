@@ -2,10 +2,8 @@ import React, { useState, useRef, useEffect } from 'react'
 import * as XLSX from 'xlsx'
 import './ResumeUploader.css'
 
-// Use proxy in development to avoid CORS issues, direct URL in production
-const WEBHOOK_URL = import.meta.env.DEV 
-  ? '/api/webhook'
-  : 'https://gvkssjobs.n8n-wsk.com/webhook/d48e6560-289b-450c-a612-d04bb2247440'
+// Use proxy API route to avoid CORS issues in both development and production
+const WEBHOOK_URL = '/api/webhook'
 
 const ResumeUploader = () => {
   const [resumes, setResumes] = useState([]) // Array of {id, file}
