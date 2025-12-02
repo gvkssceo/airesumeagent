@@ -8,7 +8,7 @@ function App() {
       <div className="container">
         <div className="title-header">
           <h1 className="title">HR System</h1>
-          <footer className="app-footer" style={{backgroundColor: 'green'}}>
+          <footer className="app-footer">
             <p className="footer-text">
               <span className="footer-copyright">©</span>
               <span className="footer-powered"> powered by</span>
