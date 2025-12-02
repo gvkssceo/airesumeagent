@@ -20,9 +20,9 @@ export default async function handler(req, res) {
   try {
     // Parse multipart/form-data using busboy
     const bb = busboy({ headers: req.headers })
-    const formData = new FormData()
     const fields = {}
     const files = []
+    let filePromises = []
 
     await new Promise((resolve, reject) => {
       bb.on('field', (name, value) => {
@@ -33,21 +33,34 @@ export default async function handler(req, res) {
         const { filename, encoding, mimeType } = info
         const chunks = []
         
-        file.on('data', (chunk) => {
-          chunks.push(chunk)
-        })
-
-        file.on('end', () => {
-          files.push({
-            name,
-            filename,
-            mimeType,
-            data: Buffer.concat(chunks)
+        const filePromise = new Promise((fileResolve, fileReject) => {
+          file.on('data', (chunk) => {
+            chunks.push(chunk)
           })
+
+          file.on('end', () => {
+            files.push({
+              name,
+              filename,
+              mimeType,
+              data: Buffer.concat(chunks)
+            })
+            fileResolve()
+          })
+
+          file.on('error', fileReject)
         })
+        
+        filePromises.push(filePromise)
       })
 
-      bb.on('finish', resolve)
+      bb.on('finish', () => {
+        // Wait for all files to finish processing
+        Promise.all(filePromises)
+          .then(() => resolve())
+          .catch(reject)
+      })
+      
       bb.on('error', reject)
       
       req.pipe(bb)
@@ -59,6 +72,10 @@ export default async function handler(req, res) {
     // Add job_description
     if (fields.job_description) {
       forwardFormData.append('job_description', fields.job_description)
+    } else {
+      return res.status(400).json({ 
+        error: 'job_description is required' 
+      })
     }
 
     // Add question if provided
@@ -67,6 +84,12 @@ export default async function handler(req, res) {
     }
 
     // Add all files
+    if (files.length === 0) {
+      return res.status(400).json({ 
+        error: 'At least one resume file is required' 
+      })
+    }
+
     files.forEach(file => {
       forwardFormData.append('files[]', file.data, {
         filename: file.filename,
@@ -83,18 +106,42 @@ export default async function handler(req, res) {
     })
 
     if (!response.ok) {
-      const errorText = await response.text()
+      let errorText
+      try {
+        errorText = await response.text()
+      } catch (e) {
+        errorText = `HTTP error! status: ${response.status}`
+      }
       return res.status(response.status).json({ 
         error: errorText || `HTTP error! status: ${response.status}` 
       })
     }
 
-    const data = await response.json()
+    // Try to parse as JSON, if it fails, return as text
+    let data
+    const contentType = response.headers.get('content-type')
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        data = await response.json()
+      } catch (e) {
+        const text = await response.text()
+        return res.status(200).json({ response: text })
+      }
+    } else {
+      const text = await response.text()
+      try {
+        data = JSON.parse(text)
+      } catch (e) {
+        data = { response: text }
+      }
+    }
+
     return res.status(200).json(data)
   } catch (error) {
     console.error('Proxy error:', error)
     return res.status(500).json({ 
-      error: error.message || 'Failed to forward request to webhook' 
+      error: error.message || 'Failed to forward request to webhook',
+      details: error.stack
     })
   }
 }

@@ -212,7 +212,20 @@ const ResumeUploader = () => {
         throw new Error(errorMessage)
       }
 
-      const data = await webhookResponse.json()
+      // Try to parse response as JSON
+      let data
+      try {
+        const responseText = await webhookResponse.text()
+        try {
+          data = JSON.parse(responseText)
+        } catch (e) {
+          // If response is not JSON, wrap it
+          data = { response: responseText }
+        }
+      } catch (e) {
+        throw new Error('Failed to parse response from server')
+      }
+
       setResponse(data)
       alert('Uploaded. Processing...')
     } catch (err) {
@@ -484,10 +497,43 @@ const ResumeUploader = () => {
             id="question-input"
             value={question}
             onChange={handleQuestionChange}
-            placeholder="Enter your question here..."
+            placeholder="Enter your question here... (e.g., What is the candidate ATS score?)"
             className="textarea-input"
             rows="4"
           />
+          <div className="question-suggestions">
+            <div className="suggestions-label">Suggested Questions:</div>
+            <div className="suggestions-list">
+              <button
+                type="button"
+                onClick={() => setQuestion('What is the candidate ATS score?')}
+                className="suggestion-button"
+              >
+                What is the candidate ATS score?
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuestion('Evaluate the candidate\'s technical skills and experience.')}
+                className="suggestion-button"
+              >
+                Evaluate the candidate's technical skills and experience.
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuestion('What are the candidate\'s strengths and weaknesses?')}
+                className="suggestion-button"
+              >
+                What are the candidate's strengths and weaknesses?
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuestion('How well does the candidate match the job requirements?')}
+                className="suggestion-button"
+              >
+                How well does the candidate match the job requirements?
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Error Message */}
