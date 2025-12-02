@@ -1,6 +1,3 @@
-import busboy from 'busboy'
-import FormData from 'form-data'
-
 export default async function handler(req, res) {
   // Only allow POST requests
   if (req.method !== 'POST') {
@@ -18,91 +15,45 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Parse multipart/form-data using busboy
-    const bb = busboy({ headers: req.headers })
-    const fields = {}
-    const files = []
-    let filePromises = []
-
-    await new Promise((resolve, reject) => {
-      bb.on('field', (name, value) => {
-        fields[name] = value
-      })
-
-      bb.on('file', (name, file, info) => {
-        const { filename, encoding, mimeType } = info
-        const chunks = []
-        
-        const filePromise = new Promise((fileResolve, fileReject) => {
-          file.on('data', (chunk) => {
-            chunks.push(chunk)
-          })
-
-          file.on('end', () => {
-            files.push({
-              name,
-              filename,
-              mimeType,
-              data: Buffer.concat(chunks)
-            })
-            fileResolve()
-          })
-
-          file.on('error', fileReject)
-        })
-        
-        filePromises.push(filePromise)
-      })
-
-      bb.on('finish', () => {
-        // Wait for all files to finish processing
-        Promise.all(filePromises)
-          .then(() => resolve())
-          .catch(reject)
+    // Read the raw request body as a buffer
+    const bodyBuffer = await new Promise((resolve, reject) => {
+      const chunks = []
+      
+      // If the request is already ended, we can't read it
+      if (req.readableEnded) {
+        return reject(new Error('Request body has already been consumed'))
+      }
+      
+      // Read from the request stream
+      req.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
       })
       
-      bb.on('error', reject)
+      req.on('end', () => {
+        resolve(Buffer.concat(chunks))
+      })
       
-      req.pipe(bb)
-    })
-
-    // Reconstruct FormData for n8n
-    const forwardFormData = new FormData()
-
-    // Add job_description
-    if (fields.job_description) {
-      forwardFormData.append('job_description', fields.job_description)
-    } else {
-      return res.status(400).json({ 
-        error: 'job_description is required' 
-      })
-    }
-
-    // Add question if provided
-    if (fields.question && fields.question.trim()) {
-      forwardFormData.append('question', fields.question.trim())
-    }
-
-    // Add all files
-    if (files.length === 0) {
-      return res.status(400).json({ 
-        error: 'At least one resume file is required' 
-      })
-    }
-
-    files.forEach(file => {
-      forwardFormData.append('files[]', file.data, {
-        filename: file.filename,
-        contentType: file.mimeType || 'application/octet-stream'
+      req.on('error', (err) => {
+        reject(err)
       })
     })
 
-    // Forward to n8n webhook
+    if (!bodyBuffer || bodyBuffer.length === 0) {
+      return res.status(400).json({ error: 'Request body is empty' })
+    }
+
+    // Get content-type to preserve multipart boundary
+    const contentType = req.headers['content-type'] || 'application/octet-stream'
+
+    // Forward to n8n webhook with the raw body
     const n8nWebhookUrl = 'https://gvkssjobs.n8n-wsk.com/webhook/d48e6560-289b-450c-a612-d04bb2247440'
     
     const response = await fetch(n8nWebhookUrl, {
       method: 'POST',
-      body: forwardFormData,
+      headers: {
+        'Content-Type': contentType,
+      },
+      body: bodyBuffer,
     })
 
     if (!response.ok) {
