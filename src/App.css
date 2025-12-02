@@ -7,27 +7,70 @@
 }
 
 .container {
-  background: #f5f0e8;
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   padding: 40px;
   max-width: 1200px;
   width: 100%;
+  border: 1px solid #dadce0;
+}
+
+.title-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .title {
   font-size: 2.5rem;
-  font-weight: 700;
-  color: #8b6f47;
-  margin-bottom: 10px;
-  text-align: center;
+  font-weight: 400;
+  color: #202124;
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
 }
 
 .subtitle {
   font-size: 1.1rem;
-  color: #6b5d4a;
+  color: #5f6368;
   text-align: center;
   margin-bottom: 30px;
+}
+
+.app-footer {
+  padding: 8px 16px;
+  background: #1a73e8;
+  border-radius: 4px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+}
+
+.footer-text {
+  margin: 0;
+  font-size: 0.75rem;
+  color: white;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.footer-powered {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.footer-brand {
+  color: #fff;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.footer-copyright {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* Tablet Styles */
@@ -36,12 +79,24 @@
     padding: 30px;
   }
 
+  .title-header {
+    gap: 16px;
+  }
+
   .title {
     font-size: 2rem;
   }
 
   .subtitle {
     font-size: 1rem;
+  }
+
+  .app-footer {
+    padding: 6px 12px;
+  }
+
+  .footer-text {
+    font-size: 0.7rem;
   }
 }
 
@@ -56,15 +111,37 @@
     border-radius: 12px;
   }
 
+  .title-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
   .title {
     font-size: 1.75rem;
-    margin-bottom: 8px;
+    margin-bottom: 0;
+    width: 100%;
   }
 
   .subtitle {
     font-size: 0.95rem;
     margin-bottom: 20px;
     line-height: 1.5;
+  }
+
+  .app-footer {
+    padding: 6px 12px;
+    border-radius: 6px;
+    align-self: flex-end;
+  }
+
+  .footer-text {
+    font-size: 0.65rem;
+  }
+
+  .footer-text {
+    font-size: 0.85rem;
+    line-height: 1.6;
   }
 }
 
@@ -79,14 +156,41 @@
     border-radius: 8px;
   }
 
+  .title-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
   .title {
     font-size: 1.5rem;
-    margin-bottom: 6px;
+    margin-bottom: 0;
+    width: 100%;
   }
 
   .subtitle {
     font-size: 0.85rem;
     margin-bottom: 16px;
+  }
+
+  .app-footer {
+    padding: 5px 10px;
+    border-radius: 5px;
+    align-self: flex-end;
+  }
+
+  .footer-text {
+    font-size: 0.6rem;
+  }
+
+  .footer-text {
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+
+  .footer-brand {
+    display: block;
+    margin-top: 4px;
   }
 }
 

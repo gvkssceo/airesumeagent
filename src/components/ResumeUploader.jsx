@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import * as XLSX from 'xlsx'
+import { FaRocket, FaDownload, FaTimes } from 'react-icons/fa'
 import './ResumeUploader.css'
 
 // Use proxy API route to avoid CORS issues in both development and production
@@ -402,21 +403,21 @@ const ResumeUploader = () => {
             </div>
             {resumes.length > 0 && (
               <>
-                <div className="resumes-list">
+              <div className="resumes-list">
                   {currentResumes.map((resume, index) => (
-                    <div key={resume.id} className="resume-item">
-                      <span className="resume-item-filename">{resume.file.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveResume(resume.id)}
-                        className="remove-resume-button"
-                        disabled={loading}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                  <div key={resume.id} className="resume-item">
+                    <span className="resume-item-filename">{resume.file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveResume(resume.id)}
+                      className="remove-resume-button"
+                      disabled={loading}
+                    >
+                      <FaTimes />
+                    </button>
+                  </div>
+                ))}
+              </div>
                 {resumes.length > RESUMES_PER_PAGE && (
                   <div className="pagination-controls">
                     <button
@@ -480,7 +481,7 @@ const ResumeUploader = () => {
                     className="remove-resume-button"
                     disabled={loading}
                   >
-                    ×
+                    <FaTimes />
                   </button>
                 </div>
               </div>
@@ -616,7 +617,7 @@ const ResumeUploader = () => {
             disabled={loading}
             className="run-analysis-button"
           >
-            <span className="button-icon">🚀</span>
+            <FaRocket className="button-icon" />
             {loading ? 'Processing...' : 'Run Analysis'}
           </button>
           <button
@@ -625,7 +626,7 @@ const ResumeUploader = () => {
             className="download-report-button"
             disabled={!response}
           >
-            <span className="button-icon">📥</span>
+            <FaDownload className="button-icon" />
             Download Report
           </button>
         </div>

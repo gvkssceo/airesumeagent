@@ -6,7 +6,16 @@ function App() {
   return (
     <div className="App">
       <div className="container">
-        <h1 className="title">HR System</h1>
+        <div className="title-header">
+          <h1 className="title">HR System</h1>
+          <footer className="app-footer" style={{backgroundColor: 'green'}}>
+            <p className="footer-text">
+              <span className="footer-copyright">©</span>
+              <span className="footer-powered"> powered by</span>
+              <span className="footer-brand"> gvkss</span>
+            </p>
+          </footer>
+        </div>
         <p className="subtitle">Upload Candidate Resumes And Attach The Job Description To Evaluate How Well Each Submission Matches The Role.</p>
         
         <ResumeUploader />
