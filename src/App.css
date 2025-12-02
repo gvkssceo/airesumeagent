@@ -33,7 +33,7 @@
   flex: 1;
   min-width: 200px;
   text-align: center;
-  padding-left: 120px;
+  padding-left: 0;
 }
 
 .subtitle {
@@ -41,6 +41,9 @@
   color: #5f6368;
   text-align: center;
   margin-bottom: 30px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
 .app-footer {
@@ -50,7 +53,7 @@
   text-align: center;
   box-shadow: 0 1px 3px rgba(45, 122, 45, 0.3);
   flex-shrink: 0;
-  margin-top: -30px;
+  margin-top: -70px;
 }
 
 .footer-text {
@@ -84,10 +87,14 @@
 
   .title-header {
     gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   .title {
     font-size: 2rem;
+    padding-left: 0;
+    text-align: center;
   }
 
   .subtitle {
@@ -96,6 +103,7 @@
 
   .app-footer {
     padding: 6px 12px;
+    margin-top: 0;
   }
 
   .footer-text {
@@ -116,7 +124,7 @@
 
   .title-header {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     gap: 12px;
   }
 
@@ -124,12 +132,16 @@
     font-size: 1.75rem;
     margin-bottom: 0;
     width: 100%;
+    text-align: center;
+    padding-left: 0;
   }
 
   .app-footer {
     padding: 6px 12px;
     border-radius: 6px;
-    align-self: flex-end;
+    align-self: center;
+    width: 100%;
+    margin-top: 0;
   }
 
   .subtitle {
@@ -138,19 +150,9 @@
     line-height: 1.5;
   }
 
-  .app-footer {
-    padding: 6px 12px;
-    border-radius: 6px;
-    align-self: flex-end;
-  }
-
   .footer-text {
-    font-size: 0.65rem;
-  }
-
-  .footer-text {
-    font-size: 0.85rem;
-    line-height: 1.6;
+    font-size: 0.75rem;
+    line-height: 1.4;
   }
 }
 
@@ -167,7 +169,7 @@
 
   .title-header {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     gap: 10px;
   }
 
@@ -175,37 +177,31 @@
     font-size: 1.5rem;
     margin-bottom: 0;
     width: 100%;
+    text-align: center;
+    padding-left: 0;
   }
 
   .app-footer {
-    padding: 5px 10px;
+    padding: 6px 12px;
     border-radius: 5px;
-    align-self: flex-end;
+    align-self: center;
+    width: 100%;
+    margin-top: 0;
   }
 
   .subtitle {
     font-size: 0.85rem;
     margin-bottom: 16px;
-  }
-
-  .app-footer {
-    padding: 5px 10px;
-    border-radius: 5px;
-    align-self: flex-end;
-  }
-
-  .footer-text {
-    font-size: 0.6rem;
-  }
-
-  .footer-text {
-    font-size: 0.8rem;
     line-height: 1.5;
   }
 
+  .footer-text {
+    font-size: 0.7rem;
+    line-height: 1.4;
+  }
+
   .footer-brand {
-    display: block;
-    margin-top: 4px;
+    display: inline;
   }
 }
 

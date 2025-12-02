@@ -492,7 +492,7 @@ const ResumeUploader = () => {
         {/* Question Input */}
         <div className="form-group question-section">
           <label htmlFor="question-input" className="label">
-            Question (Optional)
+            Question
           </label>
           <textarea
             id="question-input"

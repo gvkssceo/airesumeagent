@@ -126,6 +126,8 @@
   cursor: pointer;
   transition: all 0.3s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .choose-files-button:hover {
@@ -208,6 +210,12 @@
   gap: 8px;
 }
 
+@media (max-width: 768px) {
+  .suggestions-list {
+    gap: 6px;
+  }
+}
+
 .suggestion-button {
   padding: 10px 16px;
   background: #f8f9fa;
@@ -218,6 +226,10 @@
   text-align: left;
   cursor: pointer;
   transition: all 0.3s ease;
+  min-height: 44px;
+  touch-action: manipulation;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .suggestion-button:hover {
@@ -247,6 +259,8 @@
   font-size: 0.9rem;
   color: #333;
   word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
 .remove-resume-button {
@@ -540,6 +554,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
+  min-height: 48px;
+  touch-action: manipulation;
 }
 
 .run-analysis-button:hover:not(:disabled) {
@@ -573,6 +589,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
+  min-height: 48px;
+  touch-action: manipulation;
 }
 
 .download-report-button:hover:not(:disabled) {
@@ -776,6 +794,27 @@
     font-size: 1.5rem;
     padding: 6px 16px;
   }
+
+  .suggestions-list {
+    gap: 6px;
+  }
+
+  .suggestion-button {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    word-wrap: break-word;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .textarea-input {
+    font-size: 0.95rem;
+    padding: 10px;
+  }
+
+  .label {
+    font-size: 0.95rem;
+  }
 }
 
 /* Small Mobile Styles */
@@ -943,6 +982,37 @@
   .explanation-text {
     font-size: 0.9rem;
     padding: 8px;
+  }
+
+  .suggestions-list {
+    gap: 4px;
+  }
+
+  .suggestion-button {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    word-wrap: break-word;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.4;
+  }
+
+  .textarea-input {
+    font-size: 0.9rem;
+    padding: 8px;
+  }
+
+  .label {
+    font-size: 0.9rem;
+  }
+
+  .result-item {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .result-key {
+    min-width: auto;
   }
 }
 
