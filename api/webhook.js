@@ -102,13 +102,35 @@ export default async function handler(req, res) {
     const n8nWebhookUrl = 'https://gvkssjobs.n8n-wsk.com/webhook/d48e6560-289b-450c-a612-d04bb2247440'
     console.log('Forwarding to n8n webhook...')
     
-    const response = await fetch(n8nWebhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': requestContentType,
-      },
-      body: bodyBuffer,
-    })
+    // Create AbortController for timeout (15 minutes max - longer than frontend timeout)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => {
+      controller.abort()
+      console.log('n8n webhook request timeout after 15 minutes')
+    }, 15 * 60 * 1000) // 15 minutes
+    
+    let response
+    try {
+      response = await fetch(n8nWebhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': requestContentType,
+        },
+        body: bodyBuffer,
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+    } catch (fetchError) {
+      clearTimeout(timeoutId)
+      if (fetchError.name === 'AbortError') {
+        console.error('n8n webhook request timed out after 15 minutes')
+        return res.status(504).json({ 
+          error: 'Gateway Timeout: The n8n workflow took longer than 15 minutes to respond. Please check your workflow or try again.',
+          timeout: true
+        })
+      }
+      throw fetchError
+    }
 
     console.log('n8n response status:', response.status)
 
