@@ -1,10 +1,31 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { FaRocket, FaDownload, FaTimes } from 'react-icons/fa'
 import './ResumeUploader.css'
 
 // Use proxy API route to avoid CORS issues in both development and production
 const WEBHOOK_URL = '/api/webhook'
+
+// OpenAI API Configuration
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || ''
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
+
+// Hook to close dropdown when clicking outside
+const useClickOutside = (ref, handler) => {
+  useEffect(() => {
+    const listener = (event) => {
+      if (!ref.current || ref.current.contains(event.target)) {
+        return
+      }
+      handler(event)
+    }
+    document.addEventListener('mousedown', listener)
+    document.addEventListener('touchstart', listener)
+    return () => {
+      document.removeEventListener('mousedown', listener)
+      document.removeEventListener('touchstart', listener)
+    }
+  }, [ref, handler])
+}
 
 const ResumeUploader = () => {
   const [resumes, setResumes] = useState([]) // Array of {id, file}
@@ -18,8 +39,22 @@ const ResumeUploader = () => {
   const [dragOverResume, setDragOverResume] = useState(false)
   const [dragOverJobDesc, setDragOverJobDesc] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
+  const [scoreFilter, setScoreFilter] = useState('all') // 'all', '50', '70', '80', '90'
+  const [preScoreFilter, setPreScoreFilter] = useState('all') // Pre-submission filter selection
+  const [showQuestionDropdown, setShowQuestionDropdown] = useState(false)
+  const [selectedResumeIds, setSelectedResumeIds] = useState([]) // Selected resume IDs for Smart Recruiter AI
+  const [smartRecruiterQuestion, setSmartRecruiterQuestion] = useState('')
+  const [smartRecruiterResponse, setSmartRecruiterResponse] = useState(null)
+  const [smartRecruiterLoading, setSmartRecruiterLoading] = useState(false)
+  const [showSmartRecruiterChat, setShowSmartRecruiterChat] = useState(false) // Toggle chat visibility
   const resumeInputRef = useRef(null)
   const jobDescInputRef = useRef(null)
+  const questionDropdownRef = useRef(null)
+
+  // Close dropdown when clicking outside
+  useClickOutside(questionDropdownRef, () => {
+    setShowQuestionDropdown(false)
+  })
 
   const RESUMES_PER_PAGE = 5
 
@@ -222,12 +257,26 @@ const ResumeUploader = () => {
       }
     }
     
-    // Extract ATS score from q1_answer if it contains "ATS Score: X"
+    // Extract score from q1_answer if it contains "Score: X" or just a number
     let extractedScore = null
     if (normalizedData.q1_answer && typeof normalizedData.q1_answer === 'string') {
-      const scoreMatch = normalizedData.q1_answer.match(/ATS Score:\s*(\d+)/i)
+      // Try pattern "Score: X" first
+      let scoreMatch = normalizedData.q1_answer.match(/Score:\s*(\d+)/i)
       if (scoreMatch) {
         extractedScore = scoreMatch[1]
+      } else {
+        // If question is about score, try to extract just a number
+        const questionText = normalizedData.question || normalizedData.q1_question || ''
+        if (/score/i.test(questionText)) {
+          const numberMatch = normalizedData.q1_answer.trim().match(/^(\d+)$/)
+          if (numberMatch) {
+            const potentialScore = parseInt(numberMatch[1], 10)
+            // Only accept if it's a reasonable score (0-100)
+            if (potentialScore >= 0 && potentialScore <= 100) {
+              extractedScore = String(potentialScore)
+            }
+          }
+        }
       }
     }
     
@@ -274,7 +323,7 @@ const ResumeUploader = () => {
         
         // If it looks like a score breakdown object, format it nicely
         const keys = Object.keys(value)
-        if (keys.length > 0 && (keys.includes('Skills & Tools Match') || keys.some(k => k.includes('Match') || k.includes('Experience')))) {
+        if (keys.length > 0 && (keys.includes('Skills & IT Tools') || keys.some(k => k.includes('Match') || k.includes('Experience')))) {
           // Format as key-value pairs
           return keys.map(key => `${key}: ${safeToString(value[key])}`).join('\n')
         }
@@ -299,8 +348,8 @@ const ResumeUploader = () => {
     const textValue = safeToString(answerText)
     if (!textValue || typeof textValue !== 'string') return textValue
     
-    // Remove "ATS Score: X, " prefix if present
-    let text = textValue.replace(/^ATS Score:\s*\d+[,\s]*/i, '').trim()
+    // Remove "Score: X, " prefix if present
+    let text = textValue.replace(/^Score:\s*\d+[,\s]*/i, '').trim()
     
     // Clean up any leading/trailing punctuation
     text = text.replace(/^[,\s;]+|[,\s;]+$/g, '').trim()
@@ -319,6 +368,21 @@ const ResumeUploader = () => {
     formatted = formatted.replace(/:\s*([^,;]+)([,;])/g, ':\n$1$2')
     
     return formatted
+  }
+
+  // Helper function to convert Markdown bold syntax (**text**) to HTML and render it
+  const renderMarkdownText = (text) => {
+    if (!text || typeof text !== 'string') return text
+    
+    // Convert **text** to <strong>text</strong>
+    // Match **text** but not ***text*** (triple asterisks) or more
+    let html = text.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+    
+    // Convert newlines to <br /> tags
+    html = html.replace(/\n/g, '<br />')
+    
+    // Return JSX with dangerouslySetInnerHTML to render the HTML
+    return <span dangerouslySetInnerHTML={{ __html: html }} />
   }
 
   // Helper function to parse questions from string or array
@@ -562,6 +626,7 @@ const ResumeUploader = () => {
               allResults.push({
                 candidate_name: resume.file.name.replace(/\.[^/.]+$/, '') || item.candidate_name,
                 resume_file: resume.file.name,
+                resume_id: resume.id,
                 question: result.question || item.question || item.q1_question,
                 ...item
               })
@@ -571,6 +636,7 @@ const ResumeUploader = () => {
             allResults.push({
               candidate_name: resume.file.name.replace(/\.[^/.]+$/, '') || result.answer?.candidate_name,
               resume_file: resume.file.name,
+              resume_id: resume.id,
               ...result
             })
           }
@@ -582,6 +648,11 @@ const ResumeUploader = () => {
 
       // Set response with all results
       setResponse(allResults)
+      
+      // Apply the pre-selected score filter to results filter
+      if (preScoreFilter !== 'all') {
+        setScoreFilter(preScoreFilter)
+      }
       
       console.log('=== Analysis Complete ===')
       console.log('Total results:', allResults.length)
@@ -683,11 +754,11 @@ const ResumeUploader = () => {
         const answerStr = answer ? safeToString(answer) : ''
         const explanationStr = explanation ? safeToString(explanation) : ''
         
-        // Extract ATS score if present
+        // Extract score if present
         let extractedScore = null
         let finalAnswer = answerStr
         if (answerStr) {
-          const scoreMatch = answerStr.match(/ATS Score:\s*(\d+)/i)
+          const scoreMatch = answerStr.match(/Score:\s*(\d+)/i)
           if (scoreMatch) {
             extractedScore = scoreMatch[1]
             finalAnswer = extractedScore // Use just the score for Answer column
@@ -697,25 +768,18 @@ const ResumeUploader = () => {
         // Create row data
         const row = {
           'Candidate Name': data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : '') || 'Unknown',
-          'Resume': data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : (data.candidate_name || '') || 'Unknown',
-          'Process': data.processed_at ? (() => {
-            try {
-              return new Date(data.processed_at).toISOString().slice(0, 7)
-            } catch {
-              return String(data.processed_at).slice(0, 7)
-            }
-          })() : '',
-          'Question': safeToString(questionText),
-          'Answer': finalAnswer || 'Not provided',
-          'Explanation': explanationStr || ''
+          'Resume File': data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : (data.candidate_name || '') || 'Unknown',
+          'Criteria': safeToString(questionText),
+          'Score': finalAnswer || 'Not provided',
+          'Remark': explanationStr || ''
         }
         
         // Add row
         dataToExport.push(row)
         console.log(`[Excel] Added row ${dataToExport.length}:`, {
-          Question: row['Question'].substring(0, 50),
-          Answer: row['Answer'].substring(0, 30),
-          Explanation: row['Explanation'].substring(0, 30)
+          Criteria: row['Criteria'].substring(0, 50),
+          Score: row['Score'].substring(0, 30),
+          Remark: row['Remark'].substring(0, 30)
         })
       })
       
@@ -725,11 +789,11 @@ const ResumeUploader = () => {
       if (dataToExport.length > 0) {
         console.log(`[Excel Export] Summary:`, {
           totalRows: dataToExport.length,
-          uniqueQuestions: [...new Set(dataToExport.map(r => r['Question']))].length,
-          sampleQuestions: dataToExport.slice(0, 3).map(r => ({
-            Question: r['Question'].substring(0, 50),
-            HasAnswer: !!r['Answer'],
-            HasExplanation: !!r['Explanation']
+          uniqueCriteria: [...new Set(dataToExport.map(r => r['Criteria']))].length,
+          sampleCriteria: dataToExport.slice(0, 3).map(r => ({
+            Criteria: r['Criteria'].substring(0, 50),
+            HasScore: !!r['Score'],
+            HasRemark: !!r['Remark']
           }))
         })
       } else {
@@ -761,9 +825,275 @@ const ResumeUploader = () => {
     setResponse(null)
     setError(null)
     setCurrentPage(1)
+    setPreScoreFilter('all')
+    setScoreFilter('all')
+    setSelectedResumeIds([])
+    setSmartRecruiterQuestion('')
+    setSmartRecruiterResponse(null)
+    setShowSmartRecruiterChat(false)
     // Reset file inputs
     document.getElementById('resume-input').value = ''
     document.getElementById('job-desc-input').value = ''
+  }
+
+  // Call OpenAI API with question and webhook data
+  const callOpenAI = async (question, webhookData, resumeName) => {
+    // List of models to try in order of preference
+    const modelsToTry = ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']
+    let lastError = null
+
+    // Format webhook data for the prompt
+    let webhookDataText = `Resume Analysis Results for ${resumeName}:\n\n`
+    
+    if (Array.isArray(webhookData) && webhookData.length > 0) {
+      webhookData.forEach((item, index) => {
+        const data = parseResponseData(item)
+        webhookDataText += `Question ${index + 1}: ${data.question || data.q1_question || 'N/A'}\n`
+        webhookDataText += `Answer: ${safeToString(data.q1_answer || data.answer || 'N/A')}\n`
+        if (data.q1_explanation || data.explanation) {
+          webhookDataText += `Explanation: ${safeToString(data.q1_explanation || data.explanation)}\n`
+        }
+        if (data.extractedScore) {
+          webhookDataText += `Score: ${data.extractedScore}\n`
+        }
+        webhookDataText += '\n'
+      })
+    } else if (webhookData && typeof webhookData === 'object') {
+      const data = parseResponseData(webhookData)
+      webhookDataText += `Question: ${data.question || data.q1_question || 'N/A'}\n`
+      webhookDataText += `Answer: ${safeToString(data.q1_answer || data.answer || 'N/A')}\n`
+      if (data.q1_explanation || data.explanation) {
+        webhookDataText += `Explanation: ${safeToString(data.q1_explanation || data.explanation)}\n`
+      }
+      if (data.extractedScore) {
+        webhookDataText += `Score: ${data.extractedScore}\n`
+      }
+    }
+
+    // Normalize "Nice-to-Have Skills" to "Soft Skills / Inter Personal Skills"
+    webhookDataText = webhookDataText.replace(/Nice-to-Have Skills/gi, 'Soft Skills / Inter Personal Skills')
+    webhookDataText = webhookDataText.replace(/Nice to Have Skills/gi, 'Soft Skills / Inter Personal Skills')
+
+    const prompt = `You are a smart recruiter AI assistant. Based on the following resume analysis results from a webhook, answer the user's question.
+
+${webhookDataText}
+
+User Question: ${question}
+
+Please provide a clear, detailed, and helpful answer based on the analysis results above. When referring to scoring criteria, use "Soft Skills / Inter Personal Skills" instead of "Nice-to-Have Skills".`
+
+    console.log('Calling OpenAI API...')
+    console.log('Prompt length:', prompt.length)
+
+    // Try each model until one works
+    for (const model of modelsToTry) {
+      try {
+        console.log(`Trying model: ${model}`)
+        
+        const response = await fetch(OPENAI_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${OPENAI_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a helpful AI assistant that analyzes resume evaluation results and provides insights to recruiters.'
+              },
+              {
+                role: 'user',
+                content: prompt
+              }
+            ],
+            temperature: 0.7,
+            max_tokens: 1000
+          })
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }))
+          const errorMessage = errorData.error?.message || `OpenAI API error: ${response.status}`
+          
+          // If it's a model access error, try the next model
+          if (errorMessage.includes('does not have access to model') || errorMessage.includes('model_not_found')) {
+            console.warn(`Model ${model} not available:`, errorMessage)
+            lastError = new Error(errorMessage)
+            continue // Try next model
+          }
+          
+          // For other errors, throw immediately
+          throw new Error(errorMessage)
+        }
+
+        const data = await response.json()
+        const aiResponse = data.choices?.[0]?.message?.content || 'No response from AI'
+
+        console.log(`OpenAI response received using model ${model}:`, aiResponse.substring(0, 100))
+
+        return aiResponse
+      } catch (err) {
+        // If it's a model access error, try the next model
+        if (err.message && (err.message.includes('does not have access to model') || err.message.includes('model_not_found'))) {
+          console.warn(`Model ${model} failed:`, err.message)
+          lastError = err
+          continue // Try next model
+        }
+        
+        // For other errors, throw immediately
+        console.error('OpenAI API error:', err)
+        throw err
+      }
+    }
+
+    // If we get here, all models failed
+    const errorMessage = lastError?.message || 'All models failed'
+    throw new Error(`Unable to access any OpenAI model. Last error: ${errorMessage}. Please check your OpenAI API key and project settings to ensure access to at least one model (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-4, or gpt-3.5-turbo).`)
+  }
+
+  // Handle Smart Recruiter AI question submission
+  const handleAskSmartRecruiter = async (e) => {
+    e.preventDefault()
+    
+    if (selectedResumeIds.length === 0) {
+      setError('Please select at least one resume to ask a question about')
+      return
+    }
+
+    if (!smartRecruiterQuestion || !smartRecruiterQuestion.trim()) {
+      setError('Please enter a question')
+      return
+    }
+
+    if (!response || !Array.isArray(response)) {
+      setError('No analysis results available. Please run the initial analysis first.')
+      setSmartRecruiterLoading(false)
+      return
+    }
+
+    setSmartRecruiterLoading(true)
+    setError(null)
+
+    try {
+      console.log('=== Ask Smart Recruiter AI Started ===')
+      console.log('Selected Resume IDs:', selectedResumeIds)
+      console.log('Question:', smartRecruiterQuestion)
+
+      // Get webhook response data for selected resumes
+      const allResults = []
+      
+      for (let resumeIndex = 0; resumeIndex < selectedResumeIds.length; resumeIndex++) {
+        const resumeId = selectedResumeIds[resumeIndex]
+        
+        // Find the resume file
+        const resume = resumes.find(r => r.id === resumeId)
+        if (!resume) {
+          console.warn(`Resume with ID ${resumeId} not found`)
+          continue
+        }
+
+        const resumeName = resume.file.name.replace(/\.[^/.]+$/, '')
+        
+        // Get all webhook responses for this resume
+        const resumeWebhookData = response.filter(item => {
+          const data = parseResponseData(item)
+          const itemResumeId = data.resume_id
+          const itemFileName = data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : ''
+          const resumeFileName = resume.file.name.replace(/\.[^/.]+$/, '')
+          
+          return itemResumeId === resumeId || 
+                 itemFileName.toLowerCase() === resumeFileName.toLowerCase()
+        })
+
+        console.log(`Found ${resumeWebhookData.length} webhook response(s) for resume: ${resumeName}`)
+
+        if (resumeWebhookData.length === 0) {
+          console.warn(`No webhook data found for resume: ${resumeName}`)
+          allResults.push({
+            candidate_name: resumeName,
+            resume_file: resume.file.name,
+            resume_id: resumeId,
+            question: smartRecruiterQuestion,
+            answer: 'No analysis data available for this resume. Please ensure the initial analysis has been completed.',
+            error: 'No webhook data'
+          })
+          continue
+        }
+
+        // Update loading progress
+        setLoadingProgress({
+          current: resumeIndex + 1,
+          total: selectedResumeIds.length,
+          question: smartRecruiterQuestion,
+          resume: resumeName
+        })
+
+        // Call OpenAI API with question and webhook data
+        const aiResponse = await callOpenAI(smartRecruiterQuestion, resumeWebhookData, resumeName)
+
+        allResults.push({
+          candidate_name: resumeName,
+          resume_file: resume.file.name,
+          resume_id: resumeId,
+          question: smartRecruiterQuestion,
+          answer: aiResponse,
+          ai_generated: true
+        })
+      }
+
+      setLoadingProgress(null)
+      setSmartRecruiterResponse(allResults)
+      setSmartRecruiterLoading(false)
+      
+      console.log('=== Smart Recruiter AI Complete ===')
+      console.log('Total results:', allResults.length)
+      
+    } catch (err) {
+      console.error('Error asking Smart Recruiter AI:', err)
+      setError(err.message || 'Failed to get response from Smart Recruiter AI')
+      setSmartRecruiterLoading(false)
+      setLoadingProgress(null)
+    }
+  }
+
+  // Handle checkbox selection
+  const handleResumeSelection = (resumeId, isChecked) => {
+    if (isChecked) {
+      setSelectedResumeIds(prev => [...prev, resumeId])
+    } else {
+      setSelectedResumeIds(prev => prev.filter(id => id !== resumeId))
+    }
+  }
+
+  // Get resume ID from resume group
+  const getResumeIdFromResumeGroup = (resumeGroup) => {
+    // First try to use the stored resume_id
+    if (resumeGroup.resumeId) {
+      return resumeGroup.resumeId
+    }
+    
+    // Fallback: Try to match by resume file name
+    if (resumeGroup.resumeFile) {
+      const fileName = resumeGroup.resumeFile.replace(/\.[^/.]+$/, '')
+      const resume = resumes.find(r => {
+        const resumeFileName = r.file.name.replace(/\.[^/.]+$/, '')
+        return resumeFileName.toLowerCase() === fileName.toLowerCase()
+      })
+      if (resume) return resume.id
+    }
+    
+    // Fallback: Try to match by resume name
+    if (resumeGroup.resumeName) {
+      const resume = resumes.find(r => {
+        const resumeFileName = r.file.name.replace(/\.[^/.]+$/, '')
+        return resumeFileName.toLowerCase() === resumeGroup.resumeName.toLowerCase()
+      })
+      if (resume) return resume.id
+    }
+    
+    return null
   }
 
   // Calculate pagination
@@ -779,31 +1109,123 @@ const ResumeUploader = () => {
     }
   }, [resumes.length, currentPage, totalPages])
 
+  // Helper function to extract score from a resume group
+  const getResumeScore = (resumeGroup) => {
+    // Look for score in any question's extractedScore or answer
+    for (const qa of resumeGroup.questions) {
+      if (qa.extractedScore) {
+        return parseInt(qa.extractedScore, 10)
+      }
+      if (qa.answer) {
+        const answerStr = safeToString(qa.answer)
+        
+        // Try pattern "Score: X" first
+        let scoreMatch = answerStr.match(/Score:\s*(\d+)/i)
+        if (scoreMatch) {
+          return parseInt(scoreMatch[1], 10)
+        }
+        
+        // If the question is about score and answer is just a number, use it
+        if (qa.question && /score/i.test(qa.question)) {
+          // Trim and check if answer is just a number (like "90" or "90%")
+          const trimmedAnswer = answerStr.trim()
+          // Match standalone number or number with % at the end
+          const numberMatch = trimmedAnswer.match(/^(\d+)\s*%?$/)
+          if (numberMatch) {
+            const potentialScore = parseInt(numberMatch[1], 10)
+            // Only accept if it's a reasonable score (0-100)
+            if (potentialScore >= 0 && potentialScore <= 100) {
+              return potentialScore
+            }
+          }
+        }
+      }
+    }
+    return null
+  }
+
+  // Filter resumes based on score threshold
+  const filterResumesByScore = (groupedResumes, threshold) => {
+    if (threshold === 'all') {
+      return groupedResumes
+    }
+    const minScore = parseInt(threshold, 10)
+    return groupedResumes.filter(resumeGroup => {
+      const score = getResumeScore(resumeGroup)
+      return score !== null && score >= minScore
+    })
+  }
+
+  // Group responses by resume - memoized to avoid recalculation
+  const groupedResumes = useMemo(() => {
+    if (!response || !Array.isArray(response)) {
+      return []
+    }
+
+    const groupedByResume = {}
+    
+    response.forEach((item, index) => {
+      const data = parseResponseData(item)
+      
+      // Create a consistent key for grouping (normalize filename)
+      let resumeKey = data.resume_file || data.candidate_name
+      if (resumeKey) {
+        resumeKey = resumeKey.replace(/\.[^/.]+$/, '').toLowerCase().trim()
+      } else {
+        resumeKey = `resume-${index}`
+      }
+      
+      const resumeName = data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : `Resume ${index + 1}`)
+      
+      if (!groupedByResume[resumeKey]) {
+        groupedByResume[resumeKey] = {
+          resumeName: resumeName,
+          resumeFile: data.resume_file,
+          resumeId: data.resume_id, // Store resume ID from response
+          processedAt: data.processed_at,
+          questions: []
+        }
+      }
+      
+      // If resume_id is available but not stored yet, update it
+      if (data.resume_id && !groupedByResume[resumeKey].resumeId) {
+        groupedByResume[resumeKey].resumeId = data.resume_id
+      }
+      
+      if (data.processed_at && (!groupedByResume[resumeKey].processedAt || 
+          new Date(data.processed_at) < new Date(groupedByResume[resumeKey].processedAt))) {
+        groupedByResume[resumeKey].processedAt = data.processed_at
+      }
+      
+      groupedByResume[resumeKey].questions.push({
+        question: data.question || data.q1_question,
+        answer: data.q1_answer,
+        explanation: data.q1_explanation,
+        extractedScore: data.extractedScore,
+        error: data.error,
+        processedAt: data.processed_at
+      })
+    })
+    
+    return Object.values(groupedByResume)
+  }, [response])
+
+  // Filter resumes based on score threshold - memoized
+  const filteredResumes = useMemo(() => {
+    // Use preScoreFilter if set, otherwise use scoreFilter
+    const activeFilter = preScoreFilter !== 'all' ? preScoreFilter : scoreFilter
+    if (activeFilter === 'all') {
+      return groupedResumes
+    }
+    const minScore = parseInt(activeFilter, 10)
+    return groupedResumes.filter(resumeGroup => {
+      const score = getResumeScore(resumeGroup)
+      return score !== null && score >= minScore
+    })
+  }, [groupedResumes, preScoreFilter, scoreFilter])
+
   return (
     <div className="resume-uploader">
-      {/* Scoring Criteria Section */}
-      <div className="scoring-criteria-section">
-        <h3 className="scoring-title">Scoring Criteria</h3>
-        <div className="scoring-criteria-list">
-          <div className="criteria-item">
-            <span className="criteria-label">Skills & Tools Match</span>
-            <span className="criteria-points">50 pts</span>
-          </div>
-          <div className="criteria-item">
-            <span className="criteria-label">Relevant Experience</span>
-            <span className="criteria-points">25 pts</span>
-          </div>
-          <div className="criteria-item">
-            <span className="criteria-label">Education / Certifications</span>
-            <span className="criteria-points">15 pts</span>
-          </div>
-          <div className="criteria-item">
-            <span className="criteria-label">Nice-to-have / Extra Fit</span>
-            <span className="criteria-points">10 pts</span>
-          </div>
-        </div>
-      </div>
-
       <form onSubmit={handleSubmit} className="upload-form">
         <div className="upload-sections">
           {/* Candidate Resumes Section */}
@@ -846,7 +1268,7 @@ const ResumeUploader = () => {
                       className="remove-resume-button"
                       disabled={loading}
                     >
-                      <FaTimes />
+                      ×
                     </button>
                   </div>
                 ))}
@@ -914,7 +1336,7 @@ const ResumeUploader = () => {
                     className="remove-resume-button"
                     disabled={loading}
                   >
-                    <FaTimes />
+                    ×
                   </button>
                 </div>
               </div>
@@ -922,75 +1344,215 @@ const ResumeUploader = () => {
           </div>
         </div>
 
-        {/* Question Input */}
-        <div className="form-group question-section">
-          <label htmlFor="question-input" className="label">
-            Question(s) <span style={{fontSize: '0.85rem', fontWeight: 'normal', color: '#5f6368'}}>(Enter one per line or separate by "?, ")</span>
-          </label>
-          <textarea
-            id="question-input"
-            value={question}
-            onChange={handleQuestionChange}
-            placeholder={`Enter your question(s) here... You can enter multiple questions by:
-1. Putting each question on a new line, OR
-2. Separating them with "?, " (question mark, comma)
-
-Example (new lines):
-What is the candidate ATS score?
-Evaluate the candidate's technical skills and experience?
-
-Example (comma-separated):
-What is the candidate ATS score?, Evaluate the candidate's technical skills and experience?`}
-            className="textarea-input"
-            rows="6"
-          />
-          {question && question.trim() && (
-            <div className="question-count-indicator">
-              <span className="question-count-text">
-                {parseQuestions(question).length} question{parseQuestions(question).length !== 1 ? 's' : ''} will be processed
-                {parseQuestions(question).length > 1 && ` (${resumes.length} resume${resumes.length !== 1 ? 's' : ''} × ${parseQuestions(question).length} question${parseQuestions(question).length !== 1 ? 's' : ''} = ${resumes.length * parseQuestions(question).length} total requests)`}
-              </span>
+        {/* Scoring Criteria Section */}
+        <div className="scoring-criteria-section">
+          <h3 className="scoring-title">Scoring Criteria</h3>
+          <div className="scoring-criteria-list">
+            <div className="criteria-item">
+              <span className="criteria-label">Skills & IT Tools</span>
+              <span className="criteria-points">50 pts</span>
             </div>
-          )}
-          <div className="question-suggestions">
-            <div className="suggestions-label">Suggested Questions:</div>
-            <div className="suggestions-list">
-              <button
-                type="button"
-                onClick={() => appendQuestion('What is the candidate ATS score?')}
-                className="suggestion-button"
-              >
-                What is the candidate ATS score?
-              </button>
-              <button
-                type="button"
-                onClick={() => appendQuestion('Evaluate the candidate\'s technical skills and experience.')}
-                className="suggestion-button"
-              >
-                Evaluate the candidate's technical skills and experience.
-              </button>
-              <button
-                type="button"
-                onClick={() => appendQuestion('What are the candidate\'s strengths and weaknesses?')}
-                className="suggestion-button"
-              >
-                What are the candidate's strengths and weaknesses?
-              </button>
-              <button
-                type="button"
-                onClick={() => appendQuestion('How well does the candidate match the job requirements?')}
-                className="suggestion-button"
-              >
-                How well does the candidate match the job requirements?
-              </button>
+            <div className="criteria-item">
+              <span className="criteria-label">Total / Relevant Experience</span>
+              <span className="criteria-points">25 pts</span>
+            </div>
+            <div className="criteria-item">
+              <span className="criteria-label">Education / Certifications</span>
+              <span className="criteria-points">15 pts</span>
+            </div>
+            <div className="criteria-item">
+              <span className="criteria-label">Soft Skills / Inter Personal Skills</span>
+              <span className="criteria-points">10 pts</span>
             </div>
           </div>
         </div>
 
-        {/* Error Message */}
-        {error && (
-          <div className="error-message">
-            <strong>Error:</strong> {error}
+        {/* Response Message - Show before questions */}
+        {response && (
+          <div className="response-container">
+            <div className="success-header">
+              <div className="success-header-left">
+                <strong>Success!</strong>
+                <span className="results-count">
+                  {Array.isArray(response) ? (
+                    `${filteredResumes.length} of ${groupedResumes.length} resume${groupedResumes.length !== 1 ? 's' : ''} shown${preScoreFilter !== 'all' ? ` (score ≥ ${preScoreFilter})` : scoreFilter !== 'all' ? ` (score ≥ ${scoreFilter})` : ''}`
+                  ) : 'Results received'}
+                </span>
+              </div>
+              {Array.isArray(response) && filteredResumes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSmartRecruiterChat(!showSmartRecruiterChat)}
+                  className="ask-ai-button"
+                  style={{
+                    padding: '10px 20px',
+                    background: showSmartRecruiterChat ? '#1557b0' : '#1a73e8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '0.95rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {showSmartRecruiterChat ? 'Hide AI Chat' : 'Ask Smart Recruiter AI'}
+                </button>
+              )}
+            </div>
+            <div className="results-display">
+              {Array.isArray(response) ? (
+                filteredResumes.length > 0 ? filteredResumes.map((resumeGroup, resumeIndex) => {
+                  // Extract score from the resume group
+                  const resumeScore = getResumeScore(resumeGroup)
+                  // Get resume ID from resume group
+                  const resumeId = getResumeIdFromResumeGroup(resumeGroup)
+                  const isSelected = resumeId && selectedResumeIds.includes(resumeId)
+                  
+                  return (
+                    <div key={resumeIndex} className="candidate-row">
+                      <input
+                        type="checkbox"
+                        checked={isSelected || false}
+                        onChange={(e) => {
+                          if (resumeId) {
+                            handleResumeSelection(resumeId, e.target.checked)
+                          }
+                        }}
+                        className="resume-checkbox"
+                        id={`resume-checkbox-${resumeIndex}`}
+                      />
+                      <label htmlFor={`resume-checkbox-${resumeIndex}`} className="candidate-row-label">
+                        <div className="candidate-name-simple">{resumeGroup.resumeName}</div>
+                        <div className="candidate-score-simple">
+                          {resumeScore !== null ? resumeScore : 'N/A'}
+                        </div>
+                      </label>
+                    </div>
+                  )
+                }) : (
+                  <div className="no-results-message">
+                    <p>No resumes found with score ≥ {preScoreFilter !== 'all' ? preScoreFilter : scoreFilter}.</p>
+                    <p style={{ fontSize: '0.9rem', color: '#5f6368', marginTop: '8px' }}>
+                      Try selecting a lower threshold or "All Resumes" to see all results.
+                    </p>
+                  </div>
+                )
+              ) : (
+                <div className="candidate-card">
+                  {typeof response === 'object' ? (
+                    Object.entries(response).map(([key, value]) => (
+                      <div key={key} className="result-item">
+                        <span className="result-key">{key}:</span>
+                        <span className="result-value">
+                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="result-text">{String(response)}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Ask Smart Recruiter AI Section - Chat Interface */}
+        {response && Array.isArray(response) && filteredResumes.length > 0 && showSmartRecruiterChat && (
+          <div className="smart-recruiter-section" style={{ marginTop: '24px' }}>
+            <div className="smart-recruiter-header">
+              <h3 className="smart-recruiter-title">Ask Smart Recruiter AI</h3>
+              {selectedResumeIds.length > 0 && (
+                <span className="selected-count">
+                  {selectedResumeIds.length} resume{selectedResumeIds.length !== 1 ? 's' : ''} selected
+                </span>
+              )}
+            </div>
+            <div className="smart-recruiter-form">
+              <div className="form-group">
+                <label htmlFor="smart-recruiter-question" className="label">
+                  Question
+                </label>
+                <textarea
+                  id="smart-recruiter-question"
+                  value={smartRecruiterQuestion}
+                  onChange={(e) => setSmartRecruiterQuestion(e.target.value)}
+                  placeholder="Ask any question about the selected resume(s)... e.g., Why does this resume have a high score?"
+                  className="textarea-input"
+                  rows="3"
+                  disabled={smartRecruiterLoading || selectedResumeIds.length === 0}
+                  onKeyDown={(e) => {
+                    // Allow Ctrl+Enter or Cmd+Enter to submit
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault()
+                      if (!smartRecruiterLoading && selectedResumeIds.length > 0 && smartRecruiterQuestion.trim()) {
+                        handleAskSmartRecruiter(e)
+                      }
+                    }
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleAskSmartRecruiter}
+                className="btn btn-primary smart-recruiter-button"
+                disabled={smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim()}
+              >
+                {smartRecruiterLoading ? 'Processing...' : 'Ask Smart Recruiter AI'}
+              </button>
+            </div>
+
+            {/* Smart Recruiter AI Results */}
+            {smartRecruiterResponse && smartRecruiterResponse.length > 0 && (
+              <div className="smart-recruiter-results">
+                <h4 className="smart-recruiter-results-title">Smart Recruiter AI Response</h4>
+                {smartRecruiterResponse.map((item, index) => {
+                  const resumeName = item.candidate_name || item.resume_file?.replace(/\.[^/.]+$/, '') || `Resume ${index + 1}`
+                  const question = item.question || smartRecruiterQuestion
+                  const answer = item.answer || 'No answer provided'
+                  
+                  return (
+                    <div key={index} className="smart-recruiter-result-item">
+                      <div className="smart-recruiter-result-header">
+                        <span className="smart-recruiter-resume-name">
+                          {resumeName}
+                        </span>
+                        {item.ai_generated && (
+                          <span className="ai-badge" style={{
+                            fontSize: '0.75rem',
+                            color: '#1a73e8',
+                            background: '#e8f0fe',
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            marginLeft: '8px'
+                          }}>
+                            AI Generated
+                          </span>
+                        )}
+                      </div>
+                      <div className="smart-recruiter-result-content">
+                        <div className="smart-recruiter-question">
+                          <strong>Question:</strong> {question}
+                        </div>
+                        <div className="smart-recruiter-answer">
+                          <strong>Answer:</strong> 
+                          <div style={{ 
+                            marginTop: '8px', 
+                            whiteSpace: 'pre-wrap',
+                            lineHeight: '1.6'
+                          }}>
+                            {renderMarkdownText(answer)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1020,157 +1582,123 @@ What is the candidate ATS score?, Evaluate the candidate's technical skills and 
           </div>
         )}
 
-        {/* Response Message */}
-        {response && (
-          <div className="response-container">
-            <div className="success-header">
-              <strong>Success!</strong>
-              <span className="results-count">
-                {Array.isArray(response) ? (() => {
-                  // Count unique resumes
-                  const uniqueResumes = new Set()
-                  response.forEach(item => {
-                    const data = parseResponseData(item)
-                    const resumeKey = data.resume_file || data.candidate_name
-                    if (resumeKey) uniqueResumes.add(resumeKey)
-                  })
-                  const resumeCount = uniqueResumes.size || response.length
-                  return `${resumeCount} resume${resumeCount !== 1 ? 's' : ''} with ${response.length} question${response.length !== 1 ? 's' : ''} answered`
-                })() : 'Results received'}
+        {/* Question Input */}
+        <div className="form-group question-section">
+          <div className="question-header">
+            <div className="question-label-wrapper">
+              <label htmlFor="question-input" className="label">
+                Question(s)
+              </label>
+              <div className="question-suggestions-dropdown" ref={questionDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowQuestionDropdown(!showQuestionDropdown)}
+                  className="add-questions-button"
+                  disabled={loading}
+                >
+                  Add Questions {showQuestionDropdown ? '▲' : '▼'}
+                </button>
+                {showQuestionDropdown && (
+                  <div className="questions-dropdown-menu">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        appendQuestion('What is the candidate score?')
+                        setShowQuestionDropdown(false)
+                      }}
+                      className="dropdown-question-item"
+                    >
+                      What is the candidate score?
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        appendQuestion('Evaluate the candidate\'s technical skills and experience.')
+                        setShowQuestionDropdown(false)
+                      }}
+                      className="dropdown-question-item"
+                    >
+                      Evaluate the candidate's technical skills and experience.
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        appendQuestion('What are the candidate\'s strengths and weaknesses?')
+                        setShowQuestionDropdown(false)
+                      }}
+                      className="dropdown-question-item"
+                    >
+                      What are the candidate's strengths and weaknesses?
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        appendQuestion('How well does the candidate match the job requirements?')
+                        setShowQuestionDropdown(false)
+                      }}
+                      className="dropdown-question-item"
+                    >
+                      How well does the candidate match the job requirements?
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="question-filter-wrapper">
+              <label htmlFor="pre-score-filter" className="filter-label-inline">Filter Results by Score:</label>
+              <select
+                id="pre-score-filter"
+                value={preScoreFilter}
+                onChange={(e) => {
+                  setPreScoreFilter(e.target.value)
+                  // Also update the results filter if results are already shown
+                  if (response) {
+                    setScoreFilter(e.target.value)
+                  }
+                }}
+                className="score-filter-select-inline"
+                disabled={loading}
+              >
+                <option value="all">Show All Resumes</option>
+                <option value="50">Score ≥ 50</option>
+                <option value="60">Score ≥ 60</option>
+                <option value="70">Score ≥ 70</option>
+                <option value="80">Score ≥ 80</option>
+                <option value="90">Score ≥ 90</option>
+              </select>
+            </div>
+          </div>
+          <textarea
+            id="question-input"
+            value={question}
+            onChange={handleQuestionChange}
+            placeholder={`Enter your question(s) here... You can enter multiple questions by:
+1. Putting each question on a new line, OR
+2. Separating them with "?, " (question mark, comma)
+
+Example (new lines):
+What is the candidate score?
+Evaluate the candidate's technical skills and experience?
+
+Example (comma-separated):
+What is the candidate score?, Evaluate the candidate's technical skills and experience?`}
+            className="textarea-input"
+            rows="4"
+          />
+          {question && question.trim() && (
+            <div className="question-count-indicator">
+              <span className="question-count-text">
+                {parseQuestions(question).length} question{parseQuestions(question).length !== 1 ? 's' : ''} will be processed
+                {parseQuestions(question).length > 1 && ` (${resumes.length} resume${resumes.length !== 1 ? 's' : ''} × ${parseQuestions(question).length} question${parseQuestions(question).length !== 1 ? 's' : ''} = ${resumes.length * parseQuestions(question).length} total requests)`}
               </span>
             </div>
-            <div className="results-display">
-              {Array.isArray(response) ? (() => {
-                // Group responses by resume_file or candidate_name
-                const groupedByResume = {}
-                
-                response.forEach((item, index) => {
-                  const data = parseResponseData(item)
-                  
-                  // Create a consistent key for grouping (normalize filename)
-                  let resumeKey = data.resume_file || data.candidate_name
-                  if (resumeKey) {
-                    // Normalize the key by removing extension and converting to lowercase
-                    resumeKey = resumeKey.replace(/\.[^/.]+$/, '').toLowerCase().trim()
-                  } else {
-                    // Fallback: use index if no resume identifier
-                    resumeKey = `resume-${index}`
-                  }
-                  
-                  // Get resume name (prefer candidate_name, then filename without extension)
-                  const resumeName = data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : `Resume ${index + 1}`)
-                  
-                  if (!groupedByResume[resumeKey]) {
-                    groupedByResume[resumeKey] = {
-                      resumeName: resumeName,
-                      resumeFile: data.resume_file,
-                      processedAt: data.processed_at,
-                      questions: []
-                    }
-                  }
-                  
-                  // Use the earliest processed_at timestamp
-                  if (data.processed_at && (!groupedByResume[resumeKey].processedAt || 
-                      new Date(data.processed_at) < new Date(groupedByResume[resumeKey].processedAt))) {
-                    groupedByResume[resumeKey].processedAt = data.processed_at
-                  }
-                  
-                  // Add this question-answer pair to the resume group
-                  groupedByResume[resumeKey].questions.push({
-                    question: data.question || data.q1_question,
-                    answer: data.q1_answer,
-                    explanation: data.q1_explanation,
-                    extractedScore: data.extractedScore,
-                    error: data.error,
-                    processedAt: data.processed_at
-                  })
-                })
-                
-                // Render grouped results
-                return Object.values(groupedByResume).map((resumeGroup, resumeIndex) => (
-                  <div key={resumeIndex} className="candidate-card">
-                    <div className="candidate-header">
-                      <h3 className="candidate-name">{resumeGroup.resumeName}</h3>
-                      {resumeGroup.processedAt && (
-                        <span className="processed-time">
-                          {new Date(resumeGroup.processedAt).toLocaleString()}
-                        </span>
-                      )}
-                    </div>
-                    
-                    {/* Display all questions and answers for this resume */}
-                    {resumeGroup.questions.map((qa, qIndex) => (
-                      <div key={qIndex} className="question-answer-group">
-                        {/* Display question */}
-                        {qa.question && (
-                          <div className="question-section-result">
-                            <div className="question-label">Question {qIndex + 1}:</div>
-                            <div className="question-text">{safeToString(qa.question)}</div>
-                          </div>
-                        )}
-                        
-                        {/* Display ATS Score if extracted or if answer contains score */}
-                        {(qa.extractedScore || (qa.answer && safeToString(qa.answer).match(/ATS Score:\s*\d+/i))) && (
-                          <div className="score-section">
-                            <div className="score-label">ATS Score:</div>
-                            <div className="score-value">
-                              {qa.extractedScore || safeToString(qa.answer).match(/ATS Score:\s*(\d+)/i)?.[1] || 'N/A'}
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* Display answer/response text */}
-                        {qa.answer && (
-                          <div className="explanation-section">
-                            <div className="explanation-label">
-                              Answer {qIndex + 1}:
-                            </div>
-                            <div className="explanation-text">
-                              {qa.extractedScore ? extractAnswerText(qa.answer) : safeToString(qa.answer)}
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* Display explanation/breakdown */}
-                        {qa.explanation && (
-                          <div className="explanation-section">
-                            <div className="explanation-label">Score Breakdown:</div>
-                            <div className="explanation-text">{safeToString(qa.explanation)}</div>
-                          </div>
-                        )}
-                        
-                        {/* Handle error cases */}
-                        {qa.error && (
-                          <div className="error-message">
-                            <strong>Error:</strong> {safeToString(qa.error)}
-                          </div>
-                        )}
-                        
-                        {/* Add separator between questions (except for last one) */}
-                        {qIndex < resumeGroup.questions.length - 1 && (
-                          <div className="question-separator"></div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ))
-              })() : (
-                <div className="candidate-card">
-                  {typeof response === 'object' ? (
-                    Object.entries(response).map(([key, value]) => (
-                      <div key={key} className="result-item">
-                        <span className="result-key">{key}:</span>
-                        <span className="result-value">
-                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="result-text">{String(response)}</div>
-                  )}
-                </div>
-              )}
-            </div>
+          )}
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="error-message">
+            <strong>Error:</strong> {error}
           </div>
         )}
 
@@ -1181,7 +1709,6 @@ What is the candidate ATS score?, Evaluate the candidate's technical skills and 
             disabled={loading}
             className="run-analysis-button"
           >
-            <FaRocket className="button-icon" />
             {loading ? 'Processing...' : 'Run Analysis'}
           </button>
           <button
@@ -1190,7 +1717,6 @@ What is the candidate ATS score?, Evaluate the candidate's technical skills and 
             className="download-report-button"
             disabled={!response}
           >
-            <FaDownload className="button-icon" />
             Download Report
           </button>
         </div>
