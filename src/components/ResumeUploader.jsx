@@ -706,6 +706,85 @@ const ResumeUploader = () => {
         rawData = [{ value: response }]
       }
 
+      // Apply score filter if one is selected
+      const activeFilter = preScoreFilter !== 'all' ? preScoreFilter : scoreFilter
+      
+      if (Array.isArray(rawData) && activeFilter !== 'all') {
+        // Group data by resume to check scores
+        const groupedByResume = {}
+        rawData.forEach((item) => {
+          const data = parseResponseData(item)
+          let resumeKey = data.resume_file || data.candidate_name
+          if (resumeKey) {
+            resumeKey = resumeKey.replace(/\.[^/.]+$/, '').toLowerCase().trim()
+          } else {
+            resumeKey = `resume-${Date.now()}`
+          }
+          
+          if (!groupedByResume[resumeKey]) {
+            groupedByResume[resumeKey] = {
+              resumeName: data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : ''),
+              resumeFile: data.resume_file,
+              resumeId: data.resume_id,
+              items: []
+            }
+          }
+          groupedByResume[resumeKey].items.push(item)
+        })
+
+        // Filter resumes by score
+        const minScore = parseInt(activeFilter, 10)
+        const filteredResumeKeys = Object.keys(groupedByResume).filter(resumeKey => {
+          const group = groupedByResume[resumeKey]
+          // Extract score from items (similar to getResumeScore logic)
+          for (const item of group.items) {
+            const data = parseResponseData(item)
+            let extractedScore = null
+            
+            // First check if score is already extracted
+            if (data.extractedScore) {
+              extractedScore = parseInt(data.extractedScore, 10)
+            } else if (data.q1_answer) {
+              const answerStr = safeToString(data.q1_answer)
+              // Try pattern "Score: X" first
+              let scoreMatch = answerStr.match(/Score:\s*(\d+)/i)
+              if (scoreMatch) {
+                extractedScore = parseInt(scoreMatch[1], 10)
+              } else {
+                // If question is about score and answer is just a number
+                const questionText = data.question || data.q1_question || ''
+                if (/score/i.test(questionText)) {
+                  const numberMatch = answerStr.trim().match(/^(\d+)\s*%?$/)
+                  if (numberMatch) {
+                    const potentialScore = parseInt(numberMatch[1], 10)
+                    if (potentialScore >= 0 && potentialScore <= 100) {
+                      extractedScore = potentialScore
+                    }
+                  }
+                }
+              }
+            }
+            
+            if (extractedScore !== null && extractedScore >= minScore) {
+              return true
+            }
+          }
+          return false
+        })
+
+        // Filter rawData to only include items from filtered resumes
+        rawData = rawData.filter(item => {
+          const data = parseResponseData(item)
+          let resumeKey = data.resume_file || data.candidate_name
+          if (resumeKey) {
+            resumeKey = resumeKey.replace(/\.[^/.]+$/, '').toLowerCase().trim()
+          }
+          return filteredResumeKeys.includes(resumeKey)
+        })
+
+        console.log(`[Excel Export] After filtering (score ≥ ${activeFilter}): ${rawData.length} items`)
+      }
+
       // Create Excel rows - one row per question
       const dataToExport = []
       
@@ -732,9 +811,11 @@ const ResumeUploader = () => {
         })
         
         // Get question - prioritize item.question (the actual question asked)
+        // This matches the logic used in groupedResumes: data.question || data.q1_question
         const questionText = item.question || data.question || data.q1_question || `Question ${index + 1}`
         
-        // Get answer - check multiple sources
+        // Get answer - use same field as UI (groupedResumes uses data.q1_answer)
+        // parseResponseData normalizes data into q1_answer, so this matches UI output
         let answer = data.q1_answer
         if (!answer && item.answer) {
           if (typeof item.answer === 'object' && !Array.isArray(item.answer)) {
@@ -744,7 +825,8 @@ const ResumeUploader = () => {
           }
         }
         
-        // Get explanation - check multiple sources
+        // Get explanation - use same field as UI (groupedResumes uses data.q1_explanation)
+        // parseResponseData normalizes data into q1_explanation, so this matches UI output
         let explanation = data.q1_explanation
         if (!explanation && item.answer && typeof item.answer === 'object' && !Array.isArray(item.answer)) {
           explanation = item.answer.q1_explanation || item.answer.explanation
@@ -756,30 +838,112 @@ const ResumeUploader = () => {
         
         // Extract score if present
         let extractedScore = null
-        let finalAnswer = answerStr
+        let fullAnswerText = answerStr
+        
+        // Try to extract score from answer
         if (answerStr) {
           const scoreMatch = answerStr.match(/Score:\s*(\d+)/i)
           if (scoreMatch) {
             extractedScore = scoreMatch[1]
-            finalAnswer = extractedScore // Use just the score for Answer column
+            // Keep full answer text, but also extract just the score
+            fullAnswerText = answerStr
+          } else {
+            // If question is about score and answer is just a number
+            const questionText = data.question || data.q1_question || ''
+            if (/score/i.test(questionText)) {
+              const numberMatch = answerStr.trim().match(/^(\d+)\s*%?$/)
+              if (numberMatch) {
+                const potentialScore = parseInt(numberMatch[1], 10)
+                if (potentialScore >= 0 && potentialScore <= 100) {
+                  extractedScore = String(potentialScore)
+                }
+              }
+            }
           }
         }
         
-        // Create row data
+        // Use extractedScore if available, otherwise use data.extractedScore
+        const finalScore = extractedScore || data.extractedScore || ''
+        
+        // Format processed_at timestamp
+        let processedAt = ''
+        if (data.processed_at) {
+          try {
+            const date = new Date(data.processed_at)
+            if (!isNaN(date.getTime())) {
+              processedAt = date.toLocaleString('en-US', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+              })
+            } else {
+              processedAt = String(data.processed_at)
+            }
+          } catch (e) {
+            processedAt = String(data.processed_at)
+          }
+        }
+        
+        // Extract answer text without score prefix for cleaner display
+        let answerTextWithoutScore = extractAnswerText(answerStr)
+        
+        // If a score was extracted, ensure it doesn't appear in Evaluation Answer
+        // Score should only appear in the Score column
+        if (finalScore) {
+          // If the question is about score, clear the Evaluation Answer (score goes in Score column only)
+          if (/score/i.test(questionText)) {
+            answerTextWithoutScore = ''
+          } else {
+            // For other questions, if the answer text is just the score number itself, clear it
+            const trimmedAnswer = answerTextWithoutScore.trim()
+            // Check if the trimmed answer matches the score exactly (with or without %)
+            if (trimmedAnswer === finalScore || (trimmedAnswer === `${finalScore}%`)) {
+              answerTextWithoutScore = ''
+            }
+          }
+        }
+        
+        // Check if answer contains score breakdown (like "Skills & IT Tools: X, Experience: Y")
+        let scoreBreakdown = ''
+        if (answerStr && typeof answerStr === 'string') {
+          // Look for patterns like "Skills & IT Tools: 45, Total / Relevant Experience: 20"
+          const breakdownPattern = /(?:Skills?\s*[&:]\s*IT\s*Tools?|Total\s*\/\s*Relevant\s*Experience|Education\s*\/\s*Certifications?|Soft\s*Skills?\s*\/\s*Inter\s*Personal\s*Skills?)[:\s]*(\d+)/gi
+          const matches = [...answerStr.matchAll(breakdownPattern)]
+          if (matches.length > 0) {
+            scoreBreakdown = matches.map(match => {
+              const label = match[0].replace(/[:\s]*\d+.*$/i, '').trim()
+              const score = match[1]
+              return `${label}: ${score}`
+            }).join('; ')
+          }
+        }
+        
+        // Get candidate name and resume file - use same logic as UI
+        // This matches the logic used in groupedResumes for consistency
+        const candidateName = data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : `Resume ${index + 1}`)
+        const resumeFileName = data.resume_file || candidateName
+        
+        // Create comprehensive row data
         const row = {
-          'Candidate Name': data.candidate_name || (data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : '') || 'Unknown',
-          'Resume File': data.resume_file ? data.resume_file.replace(/\.[^/.]+$/, '') : (data.candidate_name || '') || 'Unknown',
-          'Criteria': safeToString(questionText),
-          'Score': finalAnswer || 'Not provided',
-          'Remark': explanationStr || ''
+          'Candidate Name': candidateName,
+          'Resume File': resumeFileName,
+          'Question / Criteria': safeToString(questionText),
+          'Evaluation Answer': answerTextWithoutScore || '',
+          'Score': finalScore || '',
+          'Explanation / Remarks': explanationStr || ''
         }
         
         // Add row
         dataToExport.push(row)
         console.log(`[Excel] Added row ${dataToExport.length}:`, {
-          Criteria: row['Criteria'].substring(0, 50),
-          Score: row['Score'].substring(0, 30),
-          Remark: row['Remark'].substring(0, 30)
+          Candidate: row['Candidate Name'],
+          Criteria: row['Question / Criteria'].substring(0, 50),
+          Score: row['Score'],
+          HasAnswer: !!row['Full Answer']
         })
       })
       
@@ -787,14 +951,17 @@ const ResumeUploader = () => {
       
       // Log summary of what will be exported
       if (dataToExport.length > 0) {
+        const errorCount = rawData.filter(item => {
+          const data = parseResponseData(item)
+          return !!data.error
+        }).length
+        
         console.log(`[Excel Export] Summary:`, {
           totalRows: dataToExport.length,
-          uniqueCriteria: [...new Set(dataToExport.map(r => r['Criteria']))].length,
-          sampleCriteria: dataToExport.slice(0, 3).map(r => ({
-            Criteria: r['Criteria'].substring(0, 50),
-            HasScore: !!r['Score'],
-            HasRemark: !!r['Remark']
-          }))
+          uniqueCandidates: [...new Set(dataToExport.map(r => r['Candidate Name']))].length,
+          uniqueCriteria: [...new Set(dataToExport.map(r => r['Question / Criteria']))].length,
+          rowsWithScores: dataToExport.filter(r => r['Score'] !== '' && r['Score']).length,
+          rowsWithErrors: errorCount
         })
       } else {
         console.warn(`[Excel Export] No data to export! rawData had ${rawData.length} items`)
@@ -803,11 +970,23 @@ const ResumeUploader = () => {
       // Create workbook and worksheet
       const ws = XLSX.utils.json_to_sheet(dataToExport)
       const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Response Data')
+      XLSX.utils.book_append_sheet(wb, ws, 'Resume Evaluation Report')
 
-      // Generate filename with timestamp
+      // Set column widths for better readability
+      const colWidths = [
+        { wch: 20 }, // Candidate Name
+        { wch: 25 }, // Resume File
+        { wch: 40 }, // Question / Criteria
+        { wch: 60 }, // Evaluation Answer
+        { wch: 10 }, // Score
+        { wch: 60 }  // Explanation / Remarks
+      ]
+      ws['!cols'] = colWidths
+
+      // Generate filename with timestamp and filter info
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
-      const filename = `webhook-response-${timestamp}.xlsx`
+      const filterSuffix = activeFilter !== 'all' ? `-score-${activeFilter}+` : ''
+      const filename = `resume-evaluation-report${filterSuffix}-${timestamp}.xlsx`
 
       // Download the file
       XLSX.writeFile(wb, filename)
@@ -836,16 +1015,40 @@ const ResumeUploader = () => {
     document.getElementById('job-desc-input').value = ''
   }
 
-  // Call OpenAI API with question and webhook data
-  const callOpenAI = async (question, webhookData, resumeName) => {
+  // Call OpenAI API with question and webhook data (can handle multiple resumes for summary)
+  const callOpenAI = async (question, webhookData, resumeNames, isSummary = false) => {
     // List of models to try in order of preference
     const modelsToTry = ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']
     let lastError = null
 
     // Format webhook data for the prompt
-    let webhookDataText = `Resume Analysis Results for ${resumeName}:\n\n`
+    let webhookDataText = ''
     
-    if (Array.isArray(webhookData) && webhookData.length > 0) {
+    // Handle multiple resumes for summary
+    if (isSummary && Array.isArray(webhookData)) {
+      webhookData.forEach((resumeData, resumeIndex) => {
+        const resumeName = resumeNames[resumeIndex] || `Resume ${resumeIndex + 1}`
+        webhookDataText += `\n=== ${resumeName} ===\n\n`
+        
+        if (Array.isArray(resumeData) && resumeData.length > 0) {
+          resumeData.forEach((item, index) => {
+            const data = parseResponseData(item)
+            webhookDataText += `Question ${index + 1}: ${data.question || data.q1_question || 'N/A'}\n`
+            webhookDataText += `Answer: ${safeToString(data.q1_answer || data.answer || 'N/A')}\n`
+            if (data.q1_explanation || data.explanation) {
+              webhookDataText += `Explanation: ${safeToString(data.q1_explanation || data.explanation)}\n`
+            }
+            if (data.extractedScore) {
+              webhookDataText += `Score: ${data.extractedScore}\n`
+            }
+            webhookDataText += '\n'
+          })
+        }
+      })
+    } else if (Array.isArray(webhookData) && webhookData.length > 0) {
+      // Single resume format
+      const resumeName = Array.isArray(resumeNames) ? resumeNames[0] : resumeNames
+      webhookDataText = `Resume Analysis Results for ${resumeName}:\n\n`
       webhookData.forEach((item, index) => {
         const data = parseResponseData(item)
         webhookDataText += `Question ${index + 1}: ${data.question || data.q1_question || 'N/A'}\n`
@@ -859,6 +1062,8 @@ const ResumeUploader = () => {
         webhookDataText += '\n'
       })
     } else if (webhookData && typeof webhookData === 'object') {
+      const resumeName = Array.isArray(resumeNames) ? resumeNames[0] : resumeNames
+      webhookDataText = `Resume Analysis Results for ${resumeName}:\n\n`
       const data = parseResponseData(webhookData)
       webhookDataText += `Question: ${data.question || data.q1_question || 'N/A'}\n`
       webhookDataText += `Answer: ${safeToString(data.q1_answer || data.answer || 'N/A')}\n`
@@ -874,13 +1079,25 @@ const ResumeUploader = () => {
     webhookDataText = webhookDataText.replace(/Nice-to-Have Skills/gi, 'Soft Skills / Inter Personal Skills')
     webhookDataText = webhookDataText.replace(/Nice to Have Skills/gi, 'Soft Skills / Inter Personal Skills')
 
-    const prompt = `You are a smart recruiter AI assistant. Based on the following resume analysis results from a webhook, answer the user's question.
+    // Create prompt based on whether it's a summary or individual question
+    let prompt = ''
+    if (isSummary) {
+      prompt = `You are a smart recruiter AI assistant. Based on the following resume analysis results from multiple candidates, provide an overall summary answering the user's question.
+
+${webhookDataText}
+
+User Question: ${question}
+
+Please provide a very concise summary in exactly 3-6 lines that compares and evaluates all the candidates together based on the analysis results above. Be brief and to the point. Include key scores and main strengths/weaknesses only. When referring to scoring criteria, use "Soft Skills / Inter Personal Skills" instead of "Nice-to-Have Skills".`
+    } else {
+      prompt = `You are a smart recruiter AI assistant. Based on the following resume analysis results from a webhook, answer the user's question.
 
 ${webhookDataText}
 
 User Question: ${question}
 
 Please provide a clear, detailed, and helpful answer based on the analysis results above. When referring to scoring criteria, use "Soft Skills / Inter Personal Skills" instead of "Nice-to-Have Skills".`
+    }
 
     console.log('Calling OpenAI API...')
     console.log('Prompt length:', prompt.length)
@@ -981,8 +1198,9 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
       console.log('Selected Resume IDs:', selectedResumeIds)
       console.log('Question:', smartRecruiterQuestion)
 
-      // Get webhook response data for selected resumes
-      const allResults = []
+      // Collect all webhook data for selected resumes
+      const allResumeData = []
+      const allResumeNames = []
       
       for (let resumeIndex = 0; resumeIndex < selectedResumeIds.length; resumeIndex++) {
         const resumeId = selectedResumeIds[resumeIndex]
@@ -1011,44 +1229,45 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
 
         if (resumeWebhookData.length === 0) {
           console.warn(`No webhook data found for resume: ${resumeName}`)
-          allResults.push({
-            candidate_name: resumeName,
-            resume_file: resume.file.name,
-            resume_id: resumeId,
-            question: smartRecruiterQuestion,
-            answer: 'No analysis data available for this resume. Please ensure the initial analysis has been completed.',
-            error: 'No webhook data'
-          })
           continue
         }
 
-        // Update loading progress
-        setLoadingProgress({
-          current: resumeIndex + 1,
-          total: selectedResumeIds.length,
-          question: smartRecruiterQuestion,
-          resume: resumeName
-        })
-
-        // Call OpenAI API with question and webhook data
-        const aiResponse = await callOpenAI(smartRecruiterQuestion, resumeWebhookData, resumeName)
-
-        allResults.push({
-          candidate_name: resumeName,
-          resume_file: resume.file.name,
-          resume_id: resumeId,
-          question: smartRecruiterQuestion,
-          answer: aiResponse,
-          ai_generated: true
-        })
+        allResumeData.push(resumeWebhookData)
+        allResumeNames.push(resumeName)
       }
 
+      if (allResumeData.length === 0) {
+        setError('No analysis data available for selected resumes. Please ensure the initial analysis has been completed.')
+        setSmartRecruiterLoading(false)
+        return
+      }
+
+      // Update loading progress
+      setLoadingProgress({
+        current: 1,
+        total: 1,
+        question: smartRecruiterQuestion,
+        resume: `${allResumeNames.length} resume(s) selected`
+      })
+
+      // Call OpenAI API once with all resume data to get an overall summary
+      const aiResponse = await callOpenAI(smartRecruiterQuestion, allResumeData, allResumeNames, true)
+
+      // Store as a single summary response
+      setSmartRecruiterResponse([{
+        question: smartRecruiterQuestion,
+        answer: aiResponse,
+        ai_generated: true,
+        summary: true,
+        resumeCount: allResumeNames.length,
+        resumeNames: allResumeNames
+      }])
+
       setLoadingProgress(null)
-      setSmartRecruiterResponse(allResults)
       setSmartRecruiterLoading(false)
       
       console.log('=== Smart Recruiter AI Complete ===')
-      console.log('Total results:', allResults.length)
+      console.log('Summary generated for', allResumeNames.length, 'resume(s)')
       
     } catch (err) {
       console.error('Error asking Smart Recruiter AI:', err)
@@ -1367,195 +1586,6 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
           </div>
         </div>
 
-        {/* Response Message - Show before questions */}
-        {response && (
-          <div className="response-container">
-            <div className="success-header">
-              <div className="success-header-left">
-                <strong>Success!</strong>
-                <span className="results-count">
-                  {Array.isArray(response) ? (
-                    `${filteredResumes.length} of ${groupedResumes.length} resume${groupedResumes.length !== 1 ? 's' : ''} shown${preScoreFilter !== 'all' ? ` (score ≥ ${preScoreFilter})` : scoreFilter !== 'all' ? ` (score ≥ ${scoreFilter})` : ''}`
-                  ) : 'Results received'}
-                </span>
-              </div>
-              {Array.isArray(response) && filteredResumes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowSmartRecruiterChat(!showSmartRecruiterChat)}
-                  className="ask-ai-button"
-                  style={{
-                    padding: '10px 20px',
-                    background: showSmartRecruiterChat ? '#1557b0' : '#1a73e8',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    fontSize: '0.95rem',
-                    fontWeight: '500',
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {showSmartRecruiterChat ? 'Hide AI Chat' : 'Ask Smart Recruiter AI'}
-                </button>
-              )}
-            </div>
-            <div className="results-display">
-              {Array.isArray(response) ? (
-                filteredResumes.length > 0 ? filteredResumes.map((resumeGroup, resumeIndex) => {
-                  // Extract score from the resume group
-                  const resumeScore = getResumeScore(resumeGroup)
-                  // Get resume ID from resume group
-                  const resumeId = getResumeIdFromResumeGroup(resumeGroup)
-                  const isSelected = resumeId && selectedResumeIds.includes(resumeId)
-                  
-                  return (
-                    <div key={resumeIndex} className="candidate-row">
-                      <input
-                        type="checkbox"
-                        checked={isSelected || false}
-                        onChange={(e) => {
-                          if (resumeId) {
-                            handleResumeSelection(resumeId, e.target.checked)
-                          }
-                        }}
-                        className="resume-checkbox"
-                        id={`resume-checkbox-${resumeIndex}`}
-                      />
-                      <label htmlFor={`resume-checkbox-${resumeIndex}`} className="candidate-row-label">
-                        <div className="candidate-name-simple">{resumeGroup.resumeName}</div>
-                        <div className="candidate-score-simple">
-                          {resumeScore !== null ? resumeScore : 'N/A'}
-                        </div>
-                      </label>
-                    </div>
-                  )
-                }) : (
-                  <div className="no-results-message">
-                    <p>No resumes found with score ≥ {preScoreFilter !== 'all' ? preScoreFilter : scoreFilter}.</p>
-                    <p style={{ fontSize: '0.9rem', color: '#5f6368', marginTop: '8px' }}>
-                      Try selecting a lower threshold or "All Resumes" to see all results.
-                    </p>
-                  </div>
-                )
-              ) : (
-                <div className="candidate-card">
-                  {typeof response === 'object' ? (
-                    Object.entries(response).map(([key, value]) => (
-                      <div key={key} className="result-item">
-                        <span className="result-key">{key}:</span>
-                        <span className="result-value">
-                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="result-text">{String(response)}</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Ask Smart Recruiter AI Section - Chat Interface */}
-        {response && Array.isArray(response) && filteredResumes.length > 0 && showSmartRecruiterChat && (
-          <div className="smart-recruiter-section" style={{ marginTop: '24px' }}>
-            <div className="smart-recruiter-header">
-              <h3 className="smart-recruiter-title">Ask Smart Recruiter AI</h3>
-              {selectedResumeIds.length > 0 && (
-                <span className="selected-count">
-                  {selectedResumeIds.length} resume{selectedResumeIds.length !== 1 ? 's' : ''} selected
-                </span>
-              )}
-            </div>
-            <div className="smart-recruiter-form">
-              <div className="form-group">
-                <label htmlFor="smart-recruiter-question" className="label">
-                  Question
-                </label>
-                <textarea
-                  id="smart-recruiter-question"
-                  value={smartRecruiterQuestion}
-                  onChange={(e) => setSmartRecruiterQuestion(e.target.value)}
-                  placeholder="Ask any question about the selected resume(s)... e.g., Why does this resume have a high score?"
-                  className="textarea-input"
-                  rows="3"
-                  disabled={smartRecruiterLoading || selectedResumeIds.length === 0}
-                  onKeyDown={(e) => {
-                    // Allow Ctrl+Enter or Cmd+Enter to submit
-                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                      e.preventDefault()
-                      if (!smartRecruiterLoading && selectedResumeIds.length > 0 && smartRecruiterQuestion.trim()) {
-                        handleAskSmartRecruiter(e)
-                      }
-                    }
-                  }}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={handleAskSmartRecruiter}
-                className="btn btn-primary smart-recruiter-button"
-                disabled={smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim()}
-              >
-                {smartRecruiterLoading ? 'Processing...' : 'Ask Smart Recruiter AI'}
-              </button>
-            </div>
-
-            {/* Smart Recruiter AI Results */}
-            {smartRecruiterResponse && smartRecruiterResponse.length > 0 && (
-              <div className="smart-recruiter-results">
-                <h4 className="smart-recruiter-results-title">Smart Recruiter AI Response</h4>
-                {smartRecruiterResponse.map((item, index) => {
-                  const resumeName = item.candidate_name || item.resume_file?.replace(/\.[^/.]+$/, '') || `Resume ${index + 1}`
-                  const question = item.question || smartRecruiterQuestion
-                  const answer = item.answer || 'No answer provided'
-                  
-                  return (
-                    <div key={index} className="smart-recruiter-result-item">
-                      <div className="smart-recruiter-result-header">
-                        <span className="smart-recruiter-resume-name">
-                          {resumeName}
-                        </span>
-                        {item.ai_generated && (
-                          <span className="ai-badge" style={{
-                            fontSize: '0.75rem',
-                            color: '#1a73e8',
-                            background: '#e8f0fe',
-                            padding: '4px 8px',
-                            borderRadius: '4px',
-                            marginLeft: '8px'
-                          }}>
-                            AI Generated
-                          </span>
-                        )}
-                      </div>
-                      <div className="smart-recruiter-result-content">
-                        <div className="smart-recruiter-question">
-                          <strong>Question:</strong> {question}
-                        </div>
-                        <div className="smart-recruiter-answer">
-                          <strong>Answer:</strong> 
-                          <div style={{ 
-                            marginTop: '8px', 
-                            whiteSpace: 'pre-wrap',
-                            lineHeight: '1.6'
-                          }}>
-                            {renderMarkdownText(answer)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Loading Progress */}
         {loading && loadingProgress && (
           <div className="loading-progress">
@@ -1694,6 +1724,241 @@ What is the candidate score?, Evaluate the candidate's technical skills and expe
             </div>
           )}
         </div>
+
+        {/* Response Message - Show after questions */}
+        {response && (
+          <div className="response-container">
+            <div className="success-header">
+              <div className="success-header-left">
+                <strong>Success!</strong>
+                <span className="results-count">
+                  {Array.isArray(response) ? (
+                    `${filteredResumes.length} of ${groupedResumes.length} resume${groupedResumes.length !== 1 ? 's' : ''} shown${preScoreFilter !== 'all' ? ` (score ≥ ${preScoreFilter})` : scoreFilter !== 'all' ? ` (score ≥ ${scoreFilter})` : ''}`
+                  ) : 'Results received'}
+                </span>
+              </div>
+              {Array.isArray(response) && filteredResumes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSmartRecruiterChat(!showSmartRecruiterChat)}
+                  className="ask-ai-button"
+                  style={{
+                    padding: '10px 20px',
+                    background: showSmartRecruiterChat ? '#1557b0' : '#1a73e8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '0.95rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {showSmartRecruiterChat ? 'Hide AI Assistant' : 'Ask AI Assistant'}
+                </button>
+              )}
+            </div>
+            
+            {/* Resume List - Above Ask Smart Recruiter AI Section */}
+            {Array.isArray(response) && (
+              <>
+                <div className="results-display" style={{ marginTop: '16px', marginBottom: '16px' }}>
+                  {filteredResumes.length > 0 ? filteredResumes.map((resumeGroup, resumeIndex) => {
+                    // Extract score from the resume group
+                    const resumeScore = getResumeScore(resumeGroup)
+                    // Get resume ID from resume group
+                    const resumeId = getResumeIdFromResumeGroup(resumeGroup)
+                    const isSelected = resumeId && selectedResumeIds.includes(resumeId)
+                    
+                    return (
+                      <div key={resumeIndex} className="candidate-row">
+                        <input
+                          type="checkbox"
+                          checked={isSelected || false}
+                          onChange={(e) => {
+                            if (resumeId) {
+                              handleResumeSelection(resumeId, e.target.checked)
+                            }
+                          }}
+                          className="resume-checkbox"
+                          id={`resume-checkbox-${resumeIndex}`}
+                        />
+                        <label htmlFor={`resume-checkbox-${resumeIndex}`} className="candidate-row-label">
+                          <div className="candidate-name-simple">{resumeGroup.resumeName}</div>
+                          <div className="candidate-score-simple">
+                            {resumeScore !== null ? resumeScore : 'N/A'}
+                          </div>
+                        </label>
+                      </div>
+                    )
+                  }) : (
+                    <div className="no-results-message">
+                      <p>No resumes found with score ≥ {preScoreFilter !== 'all' ? preScoreFilter : scoreFilter}.</p>
+                      <p style={{ fontSize: '0.9rem', color: '#5f6368', marginTop: '8px' }}>
+                        Try selecting a lower threshold or "All Resumes" to see all results.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Ask Smart Recruiter AI Section - Show below resume list when toggled */}
+            {Array.isArray(response) && showSmartRecruiterChat && filteredResumes.length > 0 && (
+              <div className="smart-recruiter-section" style={{ marginTop: '16px', marginBottom: '16px' }}>
+                <div className="smart-recruiter-header">
+                  <h3 className="smart-recruiter-title">Ask Smart Recruiter AI</h3>
+                  {selectedResumeIds.length > 0 && (
+                    <span className="selected-count">
+                      {selectedResumeIds.length} resume{selectedResumeIds.length !== 1 ? 's' : ''} selected
+                    </span>
+                  )}
+                </div>
+
+                {/* Question Input Section */}
+                <div className="smart-recruiter-form">
+                  <div className="form-group">
+                    <label htmlFor="smart-recruiter-question" className="label">
+                      Question
+                    </label>
+                    <textarea
+                      id="smart-recruiter-question"
+                      value={smartRecruiterQuestion}
+                      onChange={(e) => setSmartRecruiterQuestion(e.target.value)}
+                      placeholder="Ask any question about the selected resume(s)... e.g., Why does this resume have a high score?"
+                      className="textarea-input"
+                      rows="3"
+                      disabled={smartRecruiterLoading || filteredResumes.length === 0}
+                      onKeyDown={(e) => {
+                        // Allow Ctrl+Enter or Cmd+Enter to submit
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault()
+                          if (!smartRecruiterLoading && selectedResumeIds.length > 0 && smartRecruiterQuestion.trim()) {
+                            handleAskSmartRecruiter(e)
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAskSmartRecruiter}
+                    className="btn btn-primary smart-recruiter-button"
+                    disabled={smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim() || filteredResumes.length === 0}
+                    style={{
+                      opacity: (smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim() || filteredResumes.length === 0) ? 0.6 : 1,
+                      cursor: (smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim() || filteredResumes.length === 0) ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    {smartRecruiterLoading ? 'Processing...' : 'Ask Smart Recruiter AI'}
+                  </button>
+                </div>
+
+                {/* Smart Recruiter AI Results */}
+                {smartRecruiterResponse && smartRecruiterResponse.length > 0 && (
+                  <div className="smart-recruiter-results">
+                    <h4 className="smart-recruiter-results-title">Smart Recruiter AI Summary</h4>
+                    {smartRecruiterResponse.map((item, index) => {
+                      const question = item.question || smartRecruiterQuestion
+                      const answer = item.answer || 'No answer provided'
+                      const isSummary = item.summary
+                      
+                      return (
+                        <div key={index} className="smart-recruiter-result-item">
+                          {isSummary && (
+                            <div className="smart-recruiter-result-header">
+                              <span className="smart-recruiter-resume-name">
+                                Overall Summary ({item.resumeCount} {item.resumeCount === 1 ? 'Resume' : 'Resumes'})
+                              </span>
+                              {item.ai_generated && (
+                                <span className="ai-badge" style={{
+                                  fontSize: '0.75rem',
+                                  color: '#1a73e8',
+                                  background: '#e8f0fe',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  marginLeft: '8px'
+                                }}>
+                                  AI Generated
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {!isSummary && (
+                            <div className="smart-recruiter-result-header">
+                              <span className="smart-recruiter-resume-name">
+                                {item.candidate_name || item.resume_file?.replace(/\.[^/.]+$/, '') || `Resume ${index + 1}`}
+                              </span>
+                              {item.ai_generated && (
+                                <span className="ai-badge" style={{
+                                  fontSize: '0.75rem',
+                                  color: '#1a73e8',
+                                  background: '#e8f0fe',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  marginLeft: '8px'
+                                }}>
+                                  AI Generated
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="smart-recruiter-result-content">
+                            <div className="smart-recruiter-question">
+                              <strong>Question:</strong> {question}
+                            </div>
+                            {isSummary && item.resumeNames && item.resumeNames.length > 0 && (
+                              <div style={{ 
+                                fontSize: '0.9rem', 
+                                color: '#5f6368', 
+                                marginTop: '4px',
+                                marginBottom: '8px'
+                              }}>
+                                <strong>Evaluated Resumes:</strong> {item.resumeNames.join(', ')}
+                              </div>
+                            )}
+                            <div className="smart-recruiter-answer">
+                              <strong>Summary:</strong> 
+                              <div style={{ 
+                                marginTop: '8px', 
+                                whiteSpace: 'pre-wrap',
+                                lineHeight: '1.6'
+                              }}>
+                                {renderMarkdownText(answer)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fallback for non-array responses */}
+            {response && !Array.isArray(response) && (
+              <div className="results-display">
+                <div className="candidate-card">
+                  {typeof response === 'object' ? (
+                    Object.entries(response).map(([key, value]) => (
+                      <div key={key} className="result-item">
+                        <span className="result-key">{key}:</span>
+                        <span className="result-value">
+                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="result-text">{String(response)}</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Error Message */}
         {error && (
