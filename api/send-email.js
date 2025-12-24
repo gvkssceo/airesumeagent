@@ -38,13 +38,13 @@ export default async function handler(req, res) {
     // SMTP Configuration from environment variables
     const smtpServer = process.env.SMTP_SERVER || 'smtp.gmail.com'
     const smtpPort = parseInt(process.env.SMTP_PORT || '587')
-    const smtpUsername = process.env.SMTP_USERNAME || 'ananthulasriharsha3@gmail.com'
-    const smtpPassword = process.env.SMTP_PASSWORD || 'xnki emje kawx veah'
+    const smtpUsername = process.env.SMTP_USERNAME || 'ggvktest@gmail.com'
+    const smtpPassword = process.env.SMTP_PASSWORD || 'tvyv ainv tedw oque'
     const useSSL = process.env.SMTP_USE_SSL === 'true'
     const useTLS = process.env.SMTP_USE_TLS !== 'false' // Default to true
     
-    const senderEmail = process.env.SENDER_EMAIL || 'ananthulasriharsha3@gmail.com'
-    const recipientEmail = 'gvkssceo@gmail.com'
+    const senderEmail = process.env.SENDER_EMAIL || 'ggvktest@gmail.com'
+    const recipientEmail = 'gvkssceo@gvkss.com'
     
     console.log('SMTP Config:', {
       host: smtpServer,
