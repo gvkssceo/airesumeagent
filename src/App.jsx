@@ -7,7 +7,7 @@ function App() {
     <div className="App">
       <div className="container">   
         <div className="title-header">
-          <h1 className="title">Smart Recruiter AI</h1>
+          <h1 className="title">AI Recruiter</h1>
           <footer className="app-footer">
             <p className="footer-text">
               <span className="footer-copyright">©</span>

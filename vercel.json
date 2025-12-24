@@ -2,12 +2,19 @@
   "functions": {
     "api/webhook.js": {
       "maxDuration": 30
+    },
+    "api/send-email.js": {
+      "maxDuration": 10
     }
   },
   "rewrites": [
     {
       "source": "/api/webhook",
       "destination": "/api/webhook.js"
+    },
+    {
+      "source": "/api/send-email",
+      "destination": "/api/send-email.js"
     }
   ]
 }

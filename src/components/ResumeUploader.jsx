@@ -584,6 +584,47 @@ const ResumeUploader = () => {
     console.log('Resumes:', resumes.length)
     console.log('Job Description:', jobDescriptionFile.name)
 
+    // Send email notification about analysis start
+    // Only send in production (when API is available)
+    try {
+      console.log('Sending email notification for', resumes.length, 'resume(s)')
+      const emailResponse = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          resumeCount: resumes.length
+        })
+      })
+      
+      if (emailResponse.status === 404) {
+        console.log('Email API not available in development mode - skipping email notification')
+        // Don't block the analysis if email API is not available
+      } else if (emailResponse.ok) {
+        const emailData = await emailResponse.json()
+        console.log('Email notification sent successfully:', emailData)
+      } else {
+        const errorText = await emailResponse.text()
+        let emailData
+        try {
+          emailData = JSON.parse(errorText)
+        } catch {
+          emailData = { error: errorText }
+        }
+        console.error('Failed to send email notification:', emailData)
+        // Don't block the analysis if email fails
+      }
+    } catch (emailError) {
+      // Handle network errors or JSON parsing errors gracefully
+      if (emailError.message && emailError.message.includes('404')) {
+        console.log('Email API not available - skipping email notification')
+      } else {
+        console.error('Error sending email notification:', emailError.message || emailError)
+      }
+      // Don't block the analysis if email fails
+    }
+
     try {
       // Read job description from file
       const jobDescription = await readFileAsText(jobDescriptionFile)
@@ -932,9 +973,13 @@ const ResumeUploader = () => {
           'Candidate Name': candidateName,
           'Resume File': resumeFileName,
           'Question / Criteria': safeToString(questionText),
-          'Evaluation Answer': answerTextWithoutScore || '',
           'Score': finalScore || '',
           'Explanation / Remarks': explanationStr || ''
+        }
+        
+        // Only add Evaluation Answer column if there's an answer
+        if (answerTextWithoutScore && answerTextWithoutScore.trim() !== '') {
+          row['Evaluation Answer'] = answerTextWithoutScore
         }
         
         // Add row
@@ -972,15 +1017,26 @@ const ResumeUploader = () => {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Resume Evaluation Report')
 
+      // Check if Evaluation Answer column exists in any row
+      const hasEvaluationAnswer = dataToExport.some(row => row['Evaluation Answer'] !== undefined && row['Evaluation Answer'] !== '')
+      
       // Set column widths for better readability
       const colWidths = [
         { wch: 20 }, // Candidate Name
         { wch: 25 }, // Resume File
         { wch: 40 }, // Question / Criteria
-        { wch: 60 }, // Evaluation Answer
+      ]
+      
+      // Only add Evaluation Answer column width if it exists
+      if (hasEvaluationAnswer) {
+        colWidths.push({ wch: 60 }) // Evaluation Answer
+      }
+      
+      colWidths.push(
         { wch: 10 }, // Score
         { wch: 60 }  // Explanation / Remarks
-      ]
+      )
+      
       ws['!cols'] = colWidths
 
       // Generate filename with timestamp and filter info
@@ -1240,23 +1296,23 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
         setError('No analysis data available for selected resumes. Please ensure the initial analysis has been completed.')
         setSmartRecruiterLoading(false)
         return
-      }
+        }
 
-      // Update loading progress
-      setLoadingProgress({
+        // Update loading progress
+        setLoadingProgress({
         current: 1,
         total: 1,
-        question: smartRecruiterQuestion,
+          question: smartRecruiterQuestion,
         resume: `${allResumeNames.length} resume(s) selected`
-      })
+        })
 
       // Call OpenAI API once with all resume data to get an overall summary
       const aiResponse = await callOpenAI(smartRecruiterQuestion, allResumeData, allResumeNames, true)
 
       // Store as a single summary response
       setSmartRecruiterResponse([{
-        question: smartRecruiterQuestion,
-        answer: aiResponse,
+          question: smartRecruiterQuestion,
+          answer: aiResponse,
         ai_generated: true,
         summary: true,
         resumeCount: allResumeNames.length,
@@ -1271,7 +1327,7 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
       
     } catch (err) {
       console.error('Error asking Smart Recruiter AI:', err)
-      setError(err.message || 'Failed to get response from Smart Recruiter AI')
+      setError(err.message || 'Failed to get response from AI Recruiter')
       setSmartRecruiterLoading(false)
       setLoadingProgress(null)
     }
@@ -1473,7 +1529,7 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
                   {resumes.length > 0 ? `${resumes.length} file(s) chosen` : '(No file chosen)'}
                 </span>
               </label>
-              <p className="drop-zone-hint">*Drag and drop files here, or click to browse.</p>
+              <p className="drop-zone-hint">Drag and drop files here, or click to browse. Supported formats: PDF, DOC, DOCX, TXT</p>
             </div>
             {resumes.length > 0 && (
               <>
@@ -1519,9 +1575,9 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
             )}
           </div>
 
-          {/* Job Description Document Section */}
+          {/* Job Description Section */}
           <div className="upload-section">
-            <h3 className="section-title">Job Description Document</h3>
+            <h3 className="section-title">Job Description</h3>
             <div 
               className={`drop-zone ${dragOverJobDesc ? 'drag-over' : ''}`}
               onDrop={handleJobDescriptionDrop}
@@ -1540,10 +1596,10 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
               <label htmlFor="job-desc-input" className="drop-zone-label">
                 <button type="button" className="choose-files-button" onClick={handleChooseJobDescFile}>Choose File</button>
                 <span className="file-chosen-text">
-                  {jobDescriptionFile ? jobDescriptionFile.name : '(No file chosen)'}
+                  {jobDescriptionFile ? 'One file chosen' : '(No file chosen)'}
                 </span>
               </label>
-              <p className="drop-zone-hint">*Drag and drop the document here, or click to browse.</p>
+              <p className="drop-zone-hint">Drag and drop the file here, or click to browse. Supported formats: PDF, DOC, DOCX, TXT</p>
             </div>
             {jobDescriptionFile && (
               <div className="resumes-list">
@@ -1568,20 +1624,20 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
           <h3 className="scoring-title">Scoring Criteria</h3>
           <div className="scoring-criteria-list">
             <div className="criteria-item">
-              <span className="criteria-label">Skills & IT Tools</span>
-              <span className="criteria-points">50 pts</span>
-            </div>
-            <div className="criteria-item">
               <span className="criteria-label">Total / Relevant Experience</span>
               <span className="criteria-points">25 pts</span>
             </div>
             <div className="criteria-item">
-              <span className="criteria-label">Education / Certifications</span>
-              <span className="criteria-points">15 pts</span>
+              <span className="criteria-label">Skills & IT Tools</span>
+              <span className="criteria-points">50 pts</span>
             </div>
             <div className="criteria-item">
               <span className="criteria-label">Soft Skills / Inter Personal Skills</span>
               <span className="criteria-points">10 pts</span>
+            </div>
+            <div className="criteria-item">
+              <span className="criteria-label">Education / Certifications</span>
+              <span className="criteria-points">15 pts</span>
             </div>
           </div>
         </div>
@@ -1616,9 +1672,6 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
         <div className="form-group question-section">
           <div className="question-header">
             <div className="question-label-wrapper">
-              <label htmlFor="question-input" className="label">
-                Question(s)
-              </label>
               <div className="question-suggestions-dropdown" ref={questionDropdownRef}>
                 <button
                   type="button"
@@ -1675,7 +1728,6 @@ Please provide a clear, detailed, and helpful answer based on the analysis resul
               </div>
             </div>
             <div className="question-filter-wrapper">
-              <label htmlFor="pre-score-filter" className="filter-label-inline">Filter Results by Score:</label>
               <select
                 id="pre-score-filter"
                 value={preScoreFilter}
@@ -1809,7 +1861,7 @@ What is the candidate score?, Evaluate the candidate's technical skills and expe
             {Array.isArray(response) && showSmartRecruiterChat && filteredResumes.length > 0 && (
               <div className="smart-recruiter-section" style={{ marginTop: '16px', marginBottom: '16px' }}>
                 <div className="smart-recruiter-header">
-                  <h3 className="smart-recruiter-title">Ask Smart Recruiter AI</h3>
+                  <h3 className="smart-recruiter-title">Ask AI Recruiter</h3>
                   {selectedResumeIds.length > 0 && (
                     <span className="selected-count">
                       {selectedResumeIds.length} resume{selectedResumeIds.length !== 1 ? 's' : ''} selected
@@ -1852,14 +1904,14 @@ What is the candidate score?, Evaluate the candidate's technical skills and expe
                       cursor: (smartRecruiterLoading || selectedResumeIds.length === 0 || !smartRecruiterQuestion.trim() || filteredResumes.length === 0) ? 'not-allowed' : 'pointer'
                     }}
                   >
-                    {smartRecruiterLoading ? 'Processing...' : 'Ask Smart Recruiter AI'}
+                    {smartRecruiterLoading ? 'Processing...' : 'Ask AI Recruiter'}
                   </button>
                 </div>
 
                 {/* Smart Recruiter AI Results */}
                 {smartRecruiterResponse && smartRecruiterResponse.length > 0 && (
                   <div className="smart-recruiter-results">
-                    <h4 className="smart-recruiter-results-title">Smart Recruiter AI Summary</h4>
+                    <h4 className="smart-recruiter-results-title">AI Recruiter Summary</h4>
                     {smartRecruiterResponse.map((item, index) => {
                       const question = item.question || smartRecruiterQuestion
                       const answer = item.answer || 'No answer provided'
@@ -1868,23 +1920,23 @@ What is the candidate score?, Evaluate the candidate's technical skills and expe
                       return (
                         <div key={index} className="smart-recruiter-result-item">
                           {isSummary && (
-                            <div className="smart-recruiter-result-header">
-                              <span className="smart-recruiter-resume-name">
+                          <div className="smart-recruiter-result-header">
+                            <span className="smart-recruiter-resume-name">
                                 Overall Summary ({item.resumeCount} {item.resumeCount === 1 ? 'Resume' : 'Resumes'})
+                            </span>
+                            {item.ai_generated && (
+                              <span className="ai-badge" style={{
+                                fontSize: '0.75rem',
+                                color: '#1a73e8',
+                                background: '#e8f0fe',
+                                padding: '4px 8px',
+                                borderRadius: '4px',
+                                marginLeft: '8px'
+                              }}>
+                                AI Generated
                               </span>
-                              {item.ai_generated && (
-                                <span className="ai-badge" style={{
-                                  fontSize: '0.75rem',
-                                  color: '#1a73e8',
-                                  background: '#e8f0fe',
-                                  padding: '4px 8px',
-                                  borderRadius: '4px',
-                                  marginLeft: '8px'
-                                }}>
-                                  AI Generated
-                                </span>
-                              )}
-                            </div>
+                            )}
+                          </div>
                           )}
                           {!isSummary && (
                             <div className="smart-recruiter-result-header">
